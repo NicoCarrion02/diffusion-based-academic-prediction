@@ -12,6 +12,7 @@ legacy/data/
 *.csv.gz
 
 # Trained models and checkpoints
+models/*
 legacy/models/
 *.pkl
 *.pt
