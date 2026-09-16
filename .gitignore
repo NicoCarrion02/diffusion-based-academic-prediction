@@ -1,7 +1,9 @@
 # Git Ignore for Diffusion Academic Prediction Project
 
 # Datasets and intermediate data
-data/
+data/interim/*
+data/raw/*
+data/processed/*
 legacy/data/
 *.parquet
 *.sas7bdat
@@ -10,7 +12,6 @@ legacy/data/
 *.csv.gz
 
 # Trained models and checkpoints
-models/
 legacy/models/
 *.pkl
 *.pt
