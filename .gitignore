@@ -1,3 +1,46 @@
+# Git Ignore for Diffusion Academic Prediction Project
+
+# Datasets and intermediate data
 data/
+legacy/data/
+*.parquet
+*.sas7bdat
+*.SAS7BDAT
+*.zip
+*.csv.gz
+
+# Trained models and checkpoints
 models/
-.vscode/    
+legacy/models/
+*.pkl
+*.pt
+*.pth
+*.safetensors
+*.onnx
+checkpoints/
+
+# Python caches and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Experiment tracking & outputs
+wandb/
+runs/
+*.log
