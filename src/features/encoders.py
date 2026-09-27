@@ -93,15 +93,20 @@ def build_categorical_encoder(strategy: str = "target_encoder", cols: Optional[L
     Permits flexible experimentation: 'target_encoder', 'one_hot', 'ordinal', 'frequency', 'catconverter'.
     """
     strategy = strategy.lower()
-    if strategy == "target_encoder":
+    if strategy in ("target_encoder", "target"):
         try:
             import category_encoders as ce
             smoothing = kwargs.get("smoothing", 10.0)
-            return ce.TargetEncoder(cols=cols, smoothing=smoothing)
+            return ce.TargetEncoder(
+                cols=cols,
+                smoothing=smoothing,
+                handle_unknown="value",
+                handle_missing="value",
+            )
         except ImportError:
             try:
                 from sklearn.preprocessing import TargetEncoder as SklearnTargetEncoder
-                return SklearnTargetEncoder(smooth=kwargs.get("smoothing", "auto"))
+                return SklearnTargetEncoder(smooth=kwargs.get("smoothing", "auto"), cv=5)
             except ImportError:
                 logger.warning("TargetEncoder not available. Falling back to OrdinalEncoder.")
                 return OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
