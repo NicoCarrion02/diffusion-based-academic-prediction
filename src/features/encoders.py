@@ -20,9 +20,10 @@ class FrequencyEncoder(BaseEstimator, TransformerMixin):
         self.maps_: Dict[str, Dict] = {}
 
     def fit(self, X: pd.DataFrame, y=None):
-        cols = self.cols if self.cols is not None else X.select_dtypes(include=["object", "category"]).columns.tolist()
-        self.cols_ = cols
-        for col in cols:
+        if not self.cols:
+            raise ValueError("FrequencyEncoder requires an explicit list of columns in 'cols'.")
+        self.cols_ = list(self.cols)
+        for col in self.cols_:
             freq = X[col].value_counts(normalize=True).to_dict()
             self.maps_[col] = freq
         return self
@@ -49,9 +50,10 @@ class CatConverterEncoder(BaseEstimator, TransformerMixin):
         self.cat_to_idx_: Dict[str, Dict] = {}
 
     def fit(self, X: pd.DataFrame, y=None):
-        cols = self.cols if self.cols is not None else X.select_dtypes(include=["object", "category"]).columns.tolist()
-        self.cols_ = cols
-        for col in cols:
+        if not self.cols:
+            raise ValueError("CatConverterEncoder requires an explicit list of columns in 'cols'.")
+        self.cols_ = list(self.cols)
+        for col in self.cols_:
             cats = sorted(X[col].dropna().unique().tolist())
             self.categories_[col] = cats
             self.cat_to_idx_[col] = {cat: idx for idx, cat in enumerate(cats)}
@@ -108,16 +110,17 @@ def build_categorical_encoder(strategy: str = "target_encoder", cols: Optional[L
                 from sklearn.preprocessing import TargetEncoder as SklearnTargetEncoder
                 return SklearnTargetEncoder(smooth=kwargs.get("smoothing", "auto"), cv=5)
             except ImportError:
-                logger.warning("TargetEncoder not available. Falling back to OrdinalEncoder.")
-                return OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+                raise ImportError(
+                    "TargetEncoder is not available. Please install 'category_encoders' "
+                    "or ensure scikit-learn >= 1.3 is installed."
+                )
 
     elif strategy == "catboost":
         try:
             import category_encoders as ce
             return ce.CatBoostEncoder(cols=cols)
         except ImportError:
-            logger.warning("CatBoostEncoder not available. Falling back to OrdinalEncoder.")
-            return OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+            raise ImportError("CatBoostEncoder requires 'category_encoders'. Run: pip install category_encoders")
 
     elif strategy == "one_hot":
         return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
