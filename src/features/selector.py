@@ -66,13 +66,11 @@ class FeatureSelector:
 
         logger.info(f"Initial candidate features: {X.shape[1]}")
 
-        # Step 1: Missingness filter
         missing_ratios = X.isnull().mean()
         valid_missing = missing_ratios[missing_ratios <= self.max_missing_ratio].index.tolist()
         logger.info(f"Features after <= {self.max_missing_ratio*100}% missingness filter: {len(valid_missing)}")
         X_curr = X[valid_missing].copy()
 
-        # Step 2: Metadata-driven separation for scoring imputation
         schema = metadata_explorer.get_schema_categorization(X_curr.columns.tolist())
         cat_cols = [c for c in schema["nominal_cols"] if c in X_curr.columns]
         num_cols = [c for c in X_curr.columns if c not in cat_cols]
@@ -84,7 +82,6 @@ class FeatureSelector:
 
         X_numeric_all = pd.concat([X_num_imp, X_cat_encoded], axis=1)
 
-        # Step 3: Low variance filter
         var_selector = VarianceThreshold(threshold=self.variance_threshold)
         try:
             var_selector.fit(X_numeric_all)
@@ -94,8 +91,7 @@ class FeatureSelector:
         except Exception as e:
             logger.warning(f"Variance threshold skipped due to: {e}")
 
-        # Step 4: Mutual Information Ranking (Exact schema discrete mask)
-        logger.info("Computing Mutual Information scores with exact schema discrete mask...")
+        logger.info("Computing Mutual Information scores...")
         discrete_set = set(schema["nominal_cols"] + schema["ordinal_discrete_cols"] + schema["binary_cols"])
         discrete_mask = np.array([col in discrete_set for col in X_numeric_all.columns])
 
@@ -109,14 +105,12 @@ class FeatureSelector:
         mi_series = pd.Series(mi_scores, index=X_numeric_all.columns)
         mi_norm = (mi_series - mi_series.min()) / (mi_series.max() - mi_series.min() + 1e-9)
 
-        # Step 5: Tree-based feature importance
         logger.info("Computing Tree-based importance scores...")
         tree_model = ExtraTreesClassifier(n_estimators=100, max_depth=12, random_state=self.random_state, n_jobs=-1)
         tree_model.fit(X_numeric_all, y)
         tree_series = pd.Series(tree_model.feature_importances_, index=X_numeric_all.columns)
         tree_norm = (tree_series - tree_series.min()) / (tree_series.max() - tree_series.min() + 1e-9)
 
-        # Step 6: Hybrid Ranking
         hybrid_score = 0.5 * mi_norm + 0.5 * tree_norm
 
         scores_df = pd.DataFrame({
@@ -128,27 +122,24 @@ class FeatureSelector:
 
         self.feature_scores_ = scores_df
 
-        # Step 7: Select top K, ensuring domain anchors are preserved if present in candidates
+        # Select top K features while preserving domain anchors
         top_candidates = scores_df["feature"].tolist()
         candidate_pool = set()
 
-        # Ensure domain anchors are included in the pool
         for anchor in DOMAIN_ANCHORS:
             if anchor in X_numeric_all.columns:
                 candidate_pool.add(anchor)
 
-        # Fill remaining slots up to target_k from highest ranking candidates
         for feat in top_candidates:
             candidate_pool.add(feat)
             if len(candidate_pool) >= self.target_k:
                 break
 
-        # Strictly sort chosen k features by hybrid_score descending for intuitive reporting
         sorted_selected_df = scores_df[scores_df["feature"].isin(candidate_pool)].sort_values(
             by="hybrid_score", ascending=False
         )
         self.selected_features_ = sorted_selected_df["feature"].tolist()[: self.target_k]
-        logger.info(f"Final selected features count: {len(self.selected_features_)} (strictly sorted by hybrid_score).")
+        logger.info(f"Selected {len(self.selected_features_)} features sorted by hybrid score.")
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
