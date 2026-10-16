@@ -269,6 +269,7 @@ class PISAMetadataExplorer:
         - ordinal_discrete_cols
         - binary_cols
         - continuous_cols
+        - other_cols
         """
         if not self.dictionary:
             self.build_dictionary()
@@ -277,29 +278,33 @@ class PISAMetadataExplorer:
         ordinal_discrete_cols = []
         binary_cols = []
         continuous_cols = []
+        other_cols = []
 
         for col in columns:
             if col in ("target", "is_synthetic"):
                 continue
             v = self.dictionary.get(col) or self.dictionary.get(col.upper())
             if v is None:
-                continuous_cols.append(col)
+                other_cols.append(col)
                 continue
-            v_type = v.get("variable_type", "continuous_scale")
+            v_type = v.get("variable_type")
             if v_type == "nominal":
                 nominal_cols.append(col)
             elif v_type == "ordinal":
                 ordinal_discrete_cols.append(col)
             elif v_type == "binary":
                 binary_cols.append(col)
-            else:
+            elif v_type == "continuous_scale":
                 continuous_cols.append(col)
+            else:
+                other_cols.append(col)
 
         return {
             "nominal_cols": nominal_cols,
             "ordinal_discrete_cols": ordinal_discrete_cols,
             "binary_cols": binary_cols,
             "continuous_cols": continuous_cols,
+            "other_cols": other_cols,
         }
 
 
