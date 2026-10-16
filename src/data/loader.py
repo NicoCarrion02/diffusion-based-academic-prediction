@@ -72,22 +72,15 @@ def prepare_train_test_data(
         f"Class 1 (High): {counts.get(1, 0)} ({proportions.get(1, 0.0)*100:.2f}%)"
     )
 
-    # Drop plausible values, survey weights, and administrative identifiers
+    # Drop non-analytical columns according to metadata (PVs, survey weights, administrative IDs)
     if metadata_explorer is None:
         metadata_explorer = PISAMetadataExplorer()
 
-    leakage_types = {"plausible_value", "survey_weight", "identifier_admin"}
-    schema_leakage = set()
-    for var_type in leakage_types:
-        schema_leakage.update(metadata_explorer.get_columns_by_type(var_type))
+    candidate_cols = [c for c in df.columns if c != "target"]
+    schema = metadata_explorer.get_schema_categorization(candidate_cols)
+    cols_to_drop = [c for c in schema["other_cols"] if c in df.columns]
 
-    pattern_leakage = {c for c in df.columns if c.startswith("PV") or "W_FSTU" in c or "W_FSTR" in c or "SENW" in c or c.startswith("W_")}
-    id_cols = {"CNT", "CNTRYID", "CNTSCHID", "CNTSTUID", "CYC", "NatCen", "STRATUM", "SUBNATIO", "ADMINMODE", "VER_DAT", "UNIT", "WVARSTRR", "BOOKID", "REGION"}
-
-    all_drop_candidates = schema_leakage.union(pattern_leakage).union(id_cols)
-    cols_to_drop = [c for c in all_drop_candidates if c in df.columns]
-
-    logger.info(f"Removing {len(cols_to_drop)} leakage and identifier columns (e.g. PVs, weights, IDs)...")
+    logger.info(f"Removing {len(cols_to_drop)} non-analytical and leakage columns according to metadata...")
     df.drop(columns=cols_to_drop, inplace=True)
 
     logger.info(f"Performing stratified split ({int((1-test_size)*100)}% train / {int(test_size*100)}% test, seed={random_state})...")
