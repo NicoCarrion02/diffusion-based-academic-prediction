@@ -6,7 +6,7 @@ and preserves core socio-economic and psychological PISA domain indices.
 
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Any
 import numpy as np
 import pandas as pd
 from sklearn.feature_selection import mutual_info_classif, VarianceThreshold
@@ -49,10 +49,21 @@ class FeatureSelector:
         self.selected_features_: List[str] = []
         self.feature_scores_: pd.DataFrame = pd.DataFrame()
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "FeatureSelector":
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        metadata_explorer: Optional[Any] = None,
+    ) -> "FeatureSelector":
         """
         Fit feature selection on training data only to prevent leakage.
+        Uses PISAMetadataExplorer schema to strictly separate nominal categories from numeric/ordinal scales
+        and to compute exact discrete Mutual Information with zero guessing.
         """
+        if metadata_explorer is None:
+            from src.data.metadata_explorer import PISAMetadataExplorer
+            metadata_explorer = PISAMetadataExplorer()
+
         logger.info(f"Initial candidate features: {X.shape[1]}")
 
         # Step 1: Missingness filter
@@ -61,15 +72,14 @@ class FeatureSelector:
         logger.info(f"Features after <= {self.max_missing_ratio*100}% missingness filter: {len(valid_missing)}")
         X_curr = X[valid_missing].copy()
 
-        # Step 2: Separate types for initial numerical imputation
-        num_cols = X_curr.select_dtypes(include=[np.number]).columns.tolist()
-        cat_cols = X_curr.select_dtypes(exclude=[np.number]).columns.tolist()
+        # Step 2: Metadata-driven separation for scoring imputation
+        schema = metadata_explorer.get_schema_categorization(X_curr.columns.tolist())
+        cat_cols = [c for c in schema["nominal_cols"] if c in X_curr.columns]
+        num_cols = [c for c in X_curr.columns if c not in cat_cols]
 
-        # Simple imputation for scoring purposes
         X_num_imp = X_curr[num_cols].fillna(X_curr[num_cols].median())
         X_cat_encoded = pd.DataFrame(index=X_curr.index)
         for col in cat_cols:
-            # Categorical factorize
             X_cat_encoded[col] = pd.factorize(X_curr[col].fillna("MISSING"))[0]
 
         X_numeric_all = pd.concat([X_num_imp, X_cat_encoded], axis=1)
@@ -84,12 +94,15 @@ class FeatureSelector:
         except Exception as e:
             logger.warning(f"Variance threshold skipped due to: {e}")
 
-        # Step 4: Mutual Information Ranking
-        logger.info("Computing Mutual Information scores...")
+        # Step 4: Mutual Information Ranking (Exact schema discrete mask)
+        logger.info("Computing Mutual Information scores with exact schema discrete mask...")
+        discrete_set = set(schema["nominal_cols"] + schema["ordinal_discrete_cols"] + schema["binary_cols"])
+        discrete_mask = np.array([col in discrete_set for col in X_numeric_all.columns])
+
         mi_scores = mutual_info_classif(
             X_numeric_all,
             y,
-            discrete_features="auto",
+            discrete_features=discrete_mask,
             random_state=self.random_state,
             n_neighbors=5,
         )
