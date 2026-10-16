@@ -4,10 +4,12 @@ PISA data loader, Argentina filtering, target binarization, and stratified split
 
 import logging
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional
 import pandas as pd
 import pyarrow.dataset as ds
 from sklearn.model_selection import train_test_split
+
+from src.data.metadata_explorer import PISAMetadataExplorer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ def prepare_train_test_data(
     test_size: float = 0.20,
     random_state: int = 42,
     force: bool = False,
+    metadata_explorer: Optional[PISAMetadataExplorer] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Filters PISA dataset for specified country, constructs binary target,
@@ -73,11 +76,21 @@ def prepare_train_test_data(
     )
 
     # STRICT TARGET LEAKAGE PREVENTION:
-    # Drop all Plausible Values (PV* for MATH, READ, SCIE), weights, and admin IDs
-    leakage_cols = [c for c in df.columns if c.startswith("PV") or "W_FSTU" in c or "W_FSTR" in c or "SENW" in c]
-    id_cols = ["CNT", "CNTRYID", "CNTSCHID", "CNTSTUID", "CYC", "NatCen", "STRATUM", "SUBNATIO", "ADMINMODE", "VER_DAT"]
-    cols_to_drop = list(set([c for c in leakage_cols + id_cols if c in df.columns]))
-    
+    # Query PISAMetadataExplorer to drop all plausible values, survey weights, and admin identifiers
+    if metadata_explorer is None:
+        metadata_explorer = PISAMetadataExplorer()
+
+    leakage_types = {"plausible_value", "survey_weight", "identifier_admin"}
+    schema_leakage = set()
+    for var_type in leakage_types:
+        schema_leakage.update(metadata_explorer.get_columns_by_type(var_type))
+
+    pattern_leakage = {c for c in df.columns if c.startswith("PV") or "W_FSTU" in c or "W_FSTR" in c or "SENW" in c or c.startswith("W_")}
+    id_cols = {"CNT", "CNTRYID", "CNTSCHID", "CNTSTUID", "CYC", "NatCen", "STRATUM", "SUBNATIO", "ADMINMODE", "VER_DAT", "UNIT", "WVARSTRR", "BOOKID", "REGION"}
+
+    all_drop_candidates = schema_leakage.union(pattern_leakage).union(id_cols)
+    cols_to_drop = [c for c in all_drop_candidates if c in df.columns]
+
     logger.info(f"Removing {len(cols_to_drop)} leakage and identifier columns (e.g. PVs, weights, IDs)...")
     df.drop(columns=cols_to_drop, inplace=True)
 
