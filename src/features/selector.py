@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_selection import mutual_info_classif, VarianceThreshold
 from sklearn.ensemble import ExtraTreesClassifier
+from src.features.cleaner import categorize_pisa_features
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,9 +57,9 @@ class FeatureSelector:
         metadata_explorer: Optional[Any] = None,
     ) -> "FeatureSelector":
         """
-        Fit feature selection on training data only to prevent leakage.
-        Uses PISAMetadataExplorer schema to strictly separate nominal categories from numeric/ordinal scales
-        and to compute exact discrete Mutual Information with zero guessing.
+        Fit feature selection on training data.
+        Categorizes features using metadata schema into nominal and numerical/discrete
+        subsets for mutual information and tree-based importance calculation.
         """
         if metadata_explorer is None:
             from src.data.metadata_explorer import PISAMetadataExplorer
@@ -71,11 +72,13 @@ class FeatureSelector:
         logger.info(f"Features after <= {self.max_missing_ratio*100}% missingness filter: {len(valid_missing)}")
         X_curr = X[valid_missing].copy()
 
-        schema = metadata_explorer.get_schema_categorization(X_curr.columns.tolist())
-        cat_cols = [c for c in schema["nominal_cols"] if c in X_curr.columns]
-        num_cols = [c for c in X_curr.columns if c not in cat_cols]
+        reg = categorize_pisa_features(X_curr, metadata_explorer)
+        self.categorization_ = reg
 
-        X_num_imp = X_curr[num_cols].fillna(X_curr[num_cols].median())
+        cat_cols = reg.nominal_cols
+        num_cols = reg.numerical_cols
+
+        X_num_imp = X_curr[num_cols].fillna(X_curr[num_cols].median()) if num_cols else pd.DataFrame(index=X_curr.index)
         X_cat_encoded = pd.DataFrame(index=X_curr.index)
         for col in cat_cols:
             X_cat_encoded[col] = pd.factorize(X_curr[col].fillna("MISSING"))[0]
@@ -92,7 +95,7 @@ class FeatureSelector:
             logger.warning(f"Variance threshold skipped due to: {e}")
 
         logger.info("Computing Mutual Information scores...")
-        discrete_set = set(schema["nominal_cols"] + schema["ordinal_discrete_cols"] + schema["binary_cols"])
+        discrete_set = set(reg.nominal_cols + reg.ordinal_discrete_cols)
         discrete_mask = np.array([col in discrete_set for col in X_numeric_all.columns])
 
         mi_scores = mutual_info_classif(
