@@ -49,9 +49,9 @@ def clean_pisa_survey_codes(
     metadata_explorer: Optional[PISAMetadataExplorer] = None,
 ) -> pd.DataFrame:
     """
-    Cleans survey data strictly using the official OECD metadata schema:
-    1. For each column, maps format-declared missing/non-response codes to NaN.
-    2. For all nominal columns, ensures non-null values are uniformly represented as categorical tokens.
+    Cleans survey data using the official OECD metadata schema:
+    1. Maps format-declared missing/non-response codes to NaN.
+    2. Formats nominal features uniformly as categorical tokens.
     """
     if metadata_explorer is None:
         metadata_explorer = PISAMetadataExplorer()
@@ -66,7 +66,6 @@ def clean_pisa_survey_codes(
         if col in ("target", "is_synthetic"):
             continue
 
-        # 1. Sanitize format-declared missing codes
         missing_codes = metadata_explorer.get_missing_codes(col)
         if missing_codes:
             mask = df_clean[col].isin(missing_codes)
@@ -75,7 +74,6 @@ def clean_pisa_survey_codes(
                 df_clean.loc[mask, col] = np.nan
                 cleaned_count += n_mod
 
-        # 2. Treat all nominal features uniformly: format valid values as categorical strings
         if col in nominal_set:
             df_clean[col] = df_clean[col].apply(
                 lambda x: f"CAT_{int(x)}" if pd.notna(x) and isinstance(x, (int, float, np.number)) and not np.isnan(x)
@@ -91,9 +89,9 @@ def categorize_pisa_features(
     metadata_explorer: Optional[PISAMetadataExplorer] = None,
 ) -> FeatureCategorization:
     """
-    Authoritative categorization of features strictly using the official SAS metadata schema:
+    Categorizes features according to the PISA SAS metadata schema:
     - 'nominal_cols': Unordered categorical variables.
-    - 'ordinal_discrete_cols': Ordered survey questions / Likert items / discrete quantities (includes binaries for snapping).
+    - 'ordinal_discrete_cols': Ordered survey questions / Likert items / discrete quantities.
     - 'binary_cols': 2-level indicator questions.
     - 'continuous_cols': Continuous IRT latent scores and indices.
     """
@@ -103,8 +101,7 @@ def categorize_pisa_features(
     cols = [c for c in df.columns if c not in ("target", "is_synthetic")]
     schema_dict = metadata_explorer.get_schema_categorization(cols)
 
-    # For downstream compatibility, ordinal_discrete_cols combines ordinals and binaries
-    # so that discrete snapping captures all discrete features.
+    # Combine discrete ordinal and binary features for downstream processing
     combined_discrete = list(schema_dict["ordinal_discrete_cols"])
     for b in schema_dict["binary_cols"]:
         if b not in combined_discrete:
