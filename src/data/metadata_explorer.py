@@ -30,7 +30,8 @@ ORDINAL_KEYWORDS = [
 
 ADMIN_VARS = {
     'CNTSCHID', 'CNTSTUID', 'CYC', 'STRATUM', 'SUBNATIO', 'NatCen', 'VER_DAT',
-    'CNT', 'CNTRYID', 'BOOKID', 'REGION', 'LANGTEST_QQQ', 'LANGTEST_COG', 'LANGTEST_PAQ'
+    'CNT', 'CNTRYID', 'BOOKID', 'REGION', 'LANGTEST_QQQ', 'LANGTEST_COG', 'LANGTEST_PAQ',
+    'WVARSTRR', 'UNIT', 'ADMINMODE'
 }
 
 KNOWN_NOMINALS = {
@@ -66,12 +67,12 @@ class PISAMetadataExplorer:
         with open(self.sas_format_path, "r", encoding="latin1") as f:
             text = f.read()
 
-        # 1. Parse value definitions: value <format_name> ... ;
-        val_pattern = re.compile(r"value\s+(\$?\w+)(.*?);", re.DOTALL | re.IGNORECASE)
+        # 1. Parse value definitions: value <format_name> ... ; (support "value $ FORMAT" syntax)
+        val_pattern = re.compile(r"value\s+(\$?\s*\w+)(.*?);", re.DOTALL | re.IGNORECASE)
         format_defs: Dict[str, Dict[str, Any]] = {}
 
         for m in val_pattern.finditer(text):
-            fmt_name = m.group(1).upper()
+            fmt_name = m.group(1).upper().replace(" ", "")
             body = m.group(2).strip()
 
             categories: Dict[str, str] = {}
@@ -80,7 +81,7 @@ class PISAMetadataExplorer:
             for line in body.split("\n"):
                 if "=" in line:
                     parts = line.split("=", 1)
-                    raw_k = parts[0].strip()
+                    raw_k = parts[0].strip().strip("'").strip('"')
                     raw_v = parts[1].strip().strip('"').strip("'")
 
                     if any(term in raw_v.lower() for term in MISSING_TERMS):
@@ -102,7 +103,7 @@ class PISAMetadataExplorer:
                 parts = line.strip().split()
                 if len(parts) >= 2:
                     var_name = parts[0].upper()
-                    fmt_ref = parts[1].rstrip(".").upper()
+                    fmt_ref = parts[1].rstrip(".").upper().replace(" ", "")
                     var_to_format[var_name] = fmt_ref
 
         logger.info(f"Parsed {len(format_defs)} format definitions and {len(var_to_format)} variable mappings.")
@@ -150,13 +151,10 @@ class PISAMetadataExplorer:
                 var_type = "nominal"
             elif col_upper == "GRADE":
                 var_type = "ordinal"
-            elif fdef is None:
-                # Unmapped numeric variable
-                var_type = "continuous_scale" if raw_type == "double" else "nominal"
-            elif fdef["is_missing_only"]:
+            elif fdef is not None and fdef["is_missing_only"]:
                 # Formats like TEACHSUPF, STUBMIF, WB156Q01HAF that only mark missing codes for continuous scales
                 var_type = "continuous_scale"
-            else:
+            elif fdef is not None and len(fdef["categories"]) > 0:
                 # Categorical with defined substantive categories
                 cats = fdef["categories"]
                 n_cats = len(cats)
@@ -170,6 +168,12 @@ class PISAMetadataExplorer:
                         var_type = "ordinal"
                     else:
                         var_type = "nominal"
+            else:
+                logger.warning(
+                    f"Variable '{col}' (format={fmt_name}, storage={raw_type}) cannot be deterministically mapped. "
+                    f"Classifying as 'unknown'."
+                )
+                var_type = "unknown"
 
             dictionary[col] = {
                 "name": col,
@@ -247,8 +251,13 @@ class PISAMetadataExplorer:
             return set()
         codes = set()
         for k in var_info["missing_codes"].keys():
+            clean_k = str(k).strip("'\"")
+            codes.add(clean_k)
             try:
-                codes.add(float(k))
+                f_val = float(clean_k)
+                codes.add(f_val)
+                if f_val.is_integer():
+                    codes.add(int(f_val))
             except ValueError:
                 pass
         return codes
