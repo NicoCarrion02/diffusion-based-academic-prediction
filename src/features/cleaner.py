@@ -34,6 +34,14 @@ class FeatureCategorization:
     def get(self, key: str, default=None):
         return getattr(self, key, default)
 
+    @property
+    def numerical_cols(self) -> List[str]:
+        return self.continuous_cols + self.ordinal_discrete_cols
+
+    @property
+    def all_features(self) -> List[str]:
+        return self.nominal_cols + self.numerical_cols
+
     def to_dict(self):
         return {
             "nominal_cols": self.nominal_cols,
@@ -59,6 +67,11 @@ def clean_pisa_survey_codes(
     cleaned_count = 0
 
     schema = metadata_explorer.get_schema_categorization(df_clean.columns.tolist())
+    invalid_cols = schema.get("other_cols", [])
+    if invalid_cols:
+        raise ValueError(
+            f"Dataset contains unmapped or non-analytical columns according to metadata: {invalid_cols}"
+        )
     nominal_set = set(schema["nominal_cols"])
 
     for col in df_clean.columns:
@@ -100,7 +113,12 @@ def categorize_pisa_features(
     cols = [c for c in df.columns if c not in ("target", "is_synthetic")]
     schema_dict = metadata_explorer.get_schema_categorization(cols)
 
-    # Combine discrete ordinal and binary features for downstream processing
+    invalid_cols = schema_dict.get("other_cols", [])
+    if invalid_cols:
+        raise ValueError(
+            f"Features contain unmapped or non-analytical columns according to metadata: {invalid_cols}"
+        )
+
     combined_discrete = list(schema_dict["ordinal_discrete_cols"])
     for b in schema_dict["binary_cols"]:
         if b not in combined_discrete:
