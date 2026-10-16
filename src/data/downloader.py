@@ -2,7 +2,6 @@
 Idempotent PISA 2022 dataset downloader and extractor.
 """
 
-import os
 import zipfile
 import logging
 import requests
