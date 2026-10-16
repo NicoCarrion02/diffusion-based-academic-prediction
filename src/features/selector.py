@@ -6,7 +6,7 @@ and preserves core socio-economic and psychological PISA domain indices.
 
 import logging
 from pathlib import Path
-from typing import List, Tuple, Optional, Any
+from typing import List, Optional, Any
 import numpy as np
 import pandas as pd
 from sklearn.feature_selection import mutual_info_classif, VarianceThreshold
