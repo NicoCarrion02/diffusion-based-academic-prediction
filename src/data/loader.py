@@ -56,17 +56,14 @@ def prepare_train_test_data(
     if target_col not in df.columns:
         raise KeyError(f"Target column '{target_col}' not found in dataset columns.")
 
-    # Remove rows where target is missing if any
     valid_mask = df[target_col].notnull()
     if not valid_mask.all():
         dropped = (~valid_mask).sum()
         logger.warning(f"Dropping {dropped} rows with missing {target_col}.")
         df = df[valid_mask].copy()
 
-    # Create binary target: 0 = Low-performing (< 420.07), 1 = High-performing (>= 420.07)
     df["target"] = (df[target_col] >= threshold).astype(int)
 
-    # Class balance summary
     counts = df["target"].value_counts().to_dict()
     proportions = df["target"].value_counts(normalize=True).to_dict()
     logger.info(
@@ -75,8 +72,7 @@ def prepare_train_test_data(
         f"Class 1 (High): {counts.get(1, 0)} ({proportions.get(1, 0.0)*100:.2f}%)"
     )
 
-    # STRICT TARGET LEAKAGE PREVENTION:
-    # Query PISAMetadataExplorer to drop all plausible values, survey weights, and admin identifiers
+    # Drop plausible values, survey weights, and administrative identifiers
     if metadata_explorer is None:
         metadata_explorer = PISAMetadataExplorer()
 
@@ -94,7 +90,6 @@ def prepare_train_test_data(
     logger.info(f"Removing {len(cols_to_drop)} leakage and identifier columns (e.g. PVs, weights, IDs)...")
     df.drop(columns=cols_to_drop, inplace=True)
 
-    # Stratified Train/Test Split
     logger.info(f"Performing stratified split ({int((1-test_size)*100)}% train / {int(test_size*100)}% test, seed={random_state})...")
     train_df, test_df = train_test_split(
         df,
