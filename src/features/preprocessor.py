@@ -12,6 +12,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from .encoders import build_categorical_encoder
+from .cleaner import FeatureCategorization
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
         target_encoder_smoothing: float = 10.0,
         categorical_cols: Optional[List[str]] = None,
         numerical_cols: Optional[List[str]] = None,
+        categorization: Optional[FeatureCategorization] = None,
     ):
         self.categorical_strategy = categorical_strategy
         self.scaler_type = scaler_type
@@ -33,6 +35,7 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
         self.target_encoder_smoothing = target_encoder_smoothing
         self.categorical_cols = categorical_cols
         self.numerical_cols = numerical_cols
+        self.categorization = categorization
 
         self.num_cols_: List[str] = []
         self.cat_cols_: List[str] = []
@@ -45,25 +48,39 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
         self.encoder_ = None
 
     def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> "TabularPreprocessor":
-        """Fit all transformers on training data only."""
+        """Fit imputers, scalers, and categorical encoders on training data."""
         X_df = X.copy()
-        
         self.feature_names_in_ = X_df.columns.tolist()
-        
-        if self.categorical_cols is not None:
-            cat_list = [self.categorical_cols] if isinstance(self.categorical_cols, str) else list(self.categorical_cols)
-            self.cat_cols_ = [c for c in cat_list if c in X_df.columns]
-        else:
-            self.cat_cols_ = []
 
-        if self.numerical_cols is not None:
-            num_list = [self.numerical_cols] if isinstance(self.numerical_cols, str) else list(self.numerical_cols)
-            self.num_cols_ = [c for c in num_list if c in X_df.columns and c not in self.cat_cols_]
+        if self.categorization is not None:
+            cat_cols = [c for c in self.categorization.nominal_cols if c in X_df.columns]
+            num_cols = [c for c in self.categorization.numerical_cols if c in X_df.columns]
         else:
-            self.num_cols_ = [c for c in X_df.columns if c not in self.cat_cols_]
+            if self.categorical_cols is None or self.numerical_cols is None:
+                raise ValueError(
+                    "TabularPreprocessor requires explicit column lists (categorical_cols and numerical_cols) "
+                    "or a FeatureCategorization object. Automatic type inference is disabled."
+                )
+            cat_cols = list(self.categorical_cols)
+            num_cols = list(self.numerical_cols)
+
+        overlap = set(cat_cols).intersection(set(num_cols))
+        if overlap:
+            raise ValueError(f"Columns assigned to both categorical and numerical types: {list(overlap)}")
+
+        assigned = set(cat_cols + num_cols)
+        unassigned = [c for c in X_df.columns if c not in assigned]
+        if unassigned:
+            raise ValueError(
+                f"Unassigned columns found in input data: {unassigned}. "
+                f"All features must be explicitly categorized as numerical or categorical."
+            )
+
+        self.cat_cols_ = [c for c in cat_cols if c in X_df.columns]
+        self.num_cols_ = [c for c in num_cols if c in X_df.columns]
 
         logger.info(
-            f"Preprocessor fit: {len(self.num_cols_)} numerical/ordinal features, "
+            f"Preprocessor fit: {len(self.num_cols_)} numerical/discrete features, "
             f"{len(self.cat_cols_)} categorical features (imputer: {self.imputation_strategy})."
         )
 
