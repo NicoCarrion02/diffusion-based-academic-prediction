@@ -24,7 +24,6 @@ class FeatureCategorization:
     binary_cols: List[str] = field(default_factory=list)
 
     def __iter__(self):
-        # Backward compatibility for tuple unpacking: nominal_cols, ordinal_discrete_cols, continuous_cols
         return iter((self.nominal_cols, self.ordinal_discrete_cols, self.continuous_cols))
 
     def __getitem__(self, key: Union[int, str]):
