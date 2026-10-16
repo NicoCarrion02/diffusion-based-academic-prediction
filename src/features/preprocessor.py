@@ -48,6 +48,8 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
         """Fit all transformers on training data only."""
         X_df = X.copy()
         
+        self.feature_names_in_ = X_df.columns.tolist()
+        
         # Explicit feature registry takes precedence
         if self.categorical_cols is not None:
             cat_list = [self.categorical_cols] if isinstance(self.categorical_cols, str) else list(self.categorical_cols)
@@ -148,7 +150,10 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
             raise ValueError("No features available to transform.")
 
         transformed_df = pd.concat(dfs, axis=1)
-        return transformed_df
+        base_cols = getattr(self, "feature_names_in_", X.columns.tolist())
+        expected_order = [c for c in base_cols if c in transformed_df.columns] + \
+                         [c for c in transformed_df.columns if c not in base_cols]
+        return transformed_df[expected_order]
 
     def fit_transform(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> pd.DataFrame:
         return self.fit(X, y).transform(X)
