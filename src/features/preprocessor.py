@@ -50,7 +50,6 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
         
         self.feature_names_in_ = X_df.columns.tolist()
         
-        # Explicit feature registry takes precedence
         if self.categorical_cols is not None:
             cat_list = [self.categorical_cols] if isinstance(self.categorical_cols, str) else list(self.categorical_cols)
             self.cat_cols_ = [c for c in cat_list if c in X_df.columns]
@@ -68,7 +67,6 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
             f"{len(self.cat_cols_)} categorical features (imputer: {self.imputation_strategy})."
         )
 
-        # Fit numerical imputer and scaler
         if self.num_cols_:
             imputed = self.num_imputer_.fit_transform(X_df[self.num_cols_])
             n_num = len(self.num_cols_)
@@ -84,7 +82,6 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
             else:
                 self.indicator_cols_ = []
 
-        # Fit categorical imputer and encoder
         if self.cat_cols_:
             self.cat_imputer_.fit(X_df[self.cat_cols_])
             imputed_cat = pd.DataFrame(
@@ -105,11 +102,10 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Transform incoming data using strictly training-fitted parameters."""
+        """Transform incoming data using fitted parameters."""
         X_df = X.copy()
         dfs = []
 
-        # Process numerical features
         if self.num_cols_:
             missing_num = [c for c in self.num_cols_ if c not in X_df.columns]
             for c in missing_num:
@@ -122,7 +118,6 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
 
             num_df = pd.DataFrame(scaled_num, columns=self.num_cols_, index=X_df.index)
 
-            # Append binary missingness indicators if enabled
             if self.indicator_cols_ and imputed.shape[1] > n_num:
                 ind_vals = imputed[:, n_num:]
                 ind_df = pd.DataFrame(ind_vals, columns=self.indicator_cols_, index=X_df.index)
@@ -130,7 +125,6 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
 
             dfs.append(num_df)
 
-        # Process categorical features
         if self.cat_cols_:
             missing_cat = [c for c in self.cat_cols_ if c not in X_df.columns]
             for c in missing_cat:
