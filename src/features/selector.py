@@ -130,22 +130,25 @@ class FeatureSelector:
 
         # Step 7: Select top K, ensuring domain anchors are preserved if present in candidates
         top_candidates = scores_df["feature"].tolist()
-        selected = []
+        candidate_pool = set()
 
-        # Add domain anchors first if available
+        # Ensure domain anchors are included in the pool
         for anchor in DOMAIN_ANCHORS:
-            if anchor in X_numeric_all.columns and anchor not in selected:
-                selected.append(anchor)
+            if anchor in X_numeric_all.columns:
+                candidate_pool.add(anchor)
 
-        # Fill remaining slots up to target_k
+        # Fill remaining slots up to target_k from highest ranking candidates
         for feat in top_candidates:
-            if feat not in selected:
-                selected.append(feat)
-            if len(selected) >= self.target_k:
+            candidate_pool.add(feat)
+            if len(candidate_pool) >= self.target_k:
                 break
 
-        self.selected_features_ = selected[: self.target_k]
-        logger.info(f"Final selected features count: {len(self.selected_features_)}")
+        # Strictly sort chosen k features by hybrid_score descending for intuitive reporting
+        sorted_selected_df = scores_df[scores_df["feature"].isin(candidate_pool)].sort_values(
+            by="hybrid_score", ascending=False
+        )
+        self.selected_features_ = sorted_selected_df["feature"].tolist()[: self.target_k]
+        logger.info(f"Final selected features count: {len(self.selected_features_)} (strictly sorted by hybrid_score).")
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
