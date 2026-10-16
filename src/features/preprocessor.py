@@ -1,6 +1,7 @@
 """
 Leakage-free tabular preprocessing pipeline.
 Fits imputers, scalers, and encoders strictly on the training set.
+Supports median imputation with missingness indicators to capture survey non-response patterns.
 """
 
 import logging
@@ -21,15 +22,24 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
         self,
         categorical_strategy: str = "target_encoder",
         scaler_type: str = "robust",
+        imputation_strategy: str = "median",
         target_encoder_smoothing: float = 10.0,
+        categorical_cols: Optional[List[str]] = None,
+        numerical_cols: Optional[List[str]] = None,
     ):
         self.categorical_strategy = categorical_strategy
         self.scaler_type = scaler_type
+        self.imputation_strategy = imputation_strategy
         self.target_encoder_smoothing = target_encoder_smoothing
+        self.categorical_cols = categorical_cols
+        self.numerical_cols = numerical_cols
 
         self.num_cols_: List[str] = []
         self.cat_cols_: List[str] = []
-        self.num_imputer_ = SimpleImputer(strategy="median")
+        self.indicator_cols_: List[str] = []
+
+        add_indicator = (imputation_strategy == "median_indicator")
+        self.num_imputer_ = SimpleImputer(strategy="median", add_indicator=add_indicator)
         self.cat_imputer_ = SimpleImputer(strategy="most_frequent")
         self.scaler_ = RobustScaler() if scaler_type == "robust" else StandardScaler()
         self.encoder_ = None
@@ -37,16 +47,40 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
     def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> "TabularPreprocessor":
         """Fit all transformers on training data only."""
         X_df = X.copy()
-        self.num_cols_ = X_df.select_dtypes(include=[np.number]).columns.tolist()
-        self.cat_cols_ = X_df.select_dtypes(exclude=[np.number]).columns.tolist()
+        
+        # Explicit feature registry takes precedence
+        if self.categorical_cols is not None:
+            cat_list = [self.categorical_cols] if isinstance(self.categorical_cols, str) else list(self.categorical_cols)
+            self.cat_cols_ = [c for c in cat_list if c in X_df.columns]
+        else:
+            self.cat_cols_ = []
 
-        logger.info(f"Preprocessor fit: {len(self.num_cols_)} numerical features, {len(self.cat_cols_)} categorical features.")
+        if self.numerical_cols is not None:
+            num_list = [self.numerical_cols] if isinstance(self.numerical_cols, str) else list(self.numerical_cols)
+            self.num_cols_ = [c for c in num_list if c in X_df.columns and c not in self.cat_cols_]
+        else:
+            self.num_cols_ = [c for c in X_df.columns if c not in self.cat_cols_]
 
-        # Fit numerical imputer
+        logger.info(
+            f"Preprocessor fit: {len(self.num_cols_)} numerical/ordinal features, "
+            f"{len(self.cat_cols_)} categorical features (imputer: {self.imputation_strategy})."
+        )
+
+        # Fit numerical imputer and scaler
         if self.num_cols_:
-            self.num_imputer_.fit(X_df[self.num_cols_])
-            imputed_num = self.num_imputer_.transform(X_df[self.num_cols_])
+            imputed = self.num_imputer_.fit_transform(X_df[self.num_cols_])
+            n_num = len(self.num_cols_)
+            imputed_num = imputed[:, :n_num]
             self.scaler_.fit(imputed_num)
+
+            if self.num_imputer_.add_indicator and self.num_imputer_.indicator_ is not None:
+                self.indicator_cols_ = [
+                    f"{self.num_cols_[idx]}_is_missing"
+                    for idx in self.num_imputer_.indicator_.features_
+                ]
+                logger.info(f"Generated {len(self.indicator_cols_)} binary missingness indicators.")
+            else:
+                self.indicator_cols_ = []
 
         # Fit categorical imputer and encoder
         if self.cat_cols_:
@@ -78,9 +112,20 @@ class TabularPreprocessor(BaseEstimator, TransformerMixin):
             missing_num = [c for c in self.num_cols_ if c not in X_df.columns]
             for c in missing_num:
                 X_df[c] = np.nan
-            imputed_num = self.num_imputer_.transform(X_df[self.num_cols_])
+            
+            imputed = self.num_imputer_.transform(X_df[self.num_cols_])
+            n_num = len(self.num_cols_)
+            imputed_num = imputed[:, :n_num]
             scaled_num = self.scaler_.transform(imputed_num)
+
             num_df = pd.DataFrame(scaled_num, columns=self.num_cols_, index=X_df.index)
+
+            # Append binary missingness indicators if enabled
+            if self.indicator_cols_ and imputed.shape[1] > n_num:
+                ind_vals = imputed[:, n_num:]
+                ind_df = pd.DataFrame(ind_vals, columns=self.indicator_cols_, index=X_df.index)
+                num_df = pd.concat([num_df, ind_df], axis=1)
+
             dfs.append(num_df)
 
         # Process categorical features
