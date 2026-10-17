@@ -1,0 +1,16 @@
+feature,label,mutual_info,tree_importance,hybrid_score
+HISEI,Highest parental occupational status (ISEI) based on 4-digit human coded ISCO,0.0637,0.0238,0.8869
+ESCS,"Index of economic, social and cultural status",0.0758,0.0146,0.766
+HOMEPOS,Home possessions (WLE),0.0705,0.012,0.6799
+ST059Q02JA,"Total number of [class periods] per week for all subjects, including mathematics",0.0645,0.0132,0.6694
+BMMJ1,Mother’s occupational status (ISEI) based on 4-digit human coded ISCO,0.0576,0.0136,0.6349
+MATHEFF,Mathematics self-efficacy: formal and applied mathematics - response options reversed in 2022 (WLE),0.0743,0.0084,0.6267
+ST255Q01JA,How many books are there in your [home]?,0.0558,0.0129,0.6083
+ST253Q01JA,How many [digital devices] with screens are there in your [home]?,0.0515,0.0135,0.5951
+ICTRES,ICT Resources (WLE),0.0823,0.0034,0.5703
+ST005Q01JA,What is the [highest level of schooling] completed by your mother?,0.0397,0.0155,0.5645
+BFMJ2,Father’s occupational status (ISEI) based on 4-digit human coded ISCO,0.0514,0.0105,0.5315
+ST006Q03JA,Does your mother have any of the following qualifications: [ISCED level 6],0.0284,0.0167,0.5212
+ST268Q04JA,Agree/disagree: Mathematics is easy for me.,0.0369,0.0139,0.5147
+ST256Q03JA,How many of these books at [home]: Contemporary literature,0.042,0.0121,0.5092
+OCOD1,ISCO-08 Occupation code - Mother,0.0775,0.0017,0.5053

@@ -1,0 +1,9 @@
+model,metric,mean_unbalanced,std_unbalanced,mean_balanced,std_balanced,mean_difference,t_statistic,p_value_ttest,wilcoxon_statistic,p_value_wilcoxon,significant_ttest_05,significant_wilcoxon_05
+Random Forest,ROC-AUC,0.8580,0.0067,0.8512,0.0055,-0.0068,-5.36,0.0058,0.0,0.0625,True,False
+Random Forest,F1 (High Performing),0.6700,0.0159,0.6960,0.0137,+0.0260,8.96,0.0009,0.0,0.0625,True,False
+Random Forest,Recall (High Performing),0.5903,0.0167,0.7000,0.0144,+0.1098,17.47,0.0001,0.0,0.0625,True,False
+Random Forest,Balanced Accuracy,0.7527,0.0104,0.7729,0.0102,+0.0202,10.35,0.0005,0.0,0.0625,True,False
+XGBoost,ROC-AUC,0.8814,0.0065,0.8729,0.0064,-0.0085,-17.20,0.0001,0.0,0.0625,True,False
+XGBoost,F1 (High Performing),0.7014,0.0165,0.7034,0.0177,+0.0020,0.45,0.6733,6.0,0.8125,False,False
+XGBoost,Recall (High Performing),0.6483,0.0216,0.6841,0.0200,+0.0359,8.22,0.0012,0.0,0.0625,True,False
+XGBoost,Balanced Accuracy,0.7747,0.0116,0.7775,0.0128,+0.0028,0.90,0.4198,4.0,0.4375,False,False
