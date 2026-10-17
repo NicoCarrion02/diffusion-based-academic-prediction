@@ -1,0 +1,20 @@
+# Feature Engineering and Selection Configuration
+
+selection:
+  target_k: 100               # First benchmark target dimension
+  max_missing_ratio: 0.50     # Drop columns with >50% missing values
+  variance_threshold: 0.005   # Drop near-zero variance features
+  method: "hybrid_importance" # Combines Mutual Information, Tree Importance, and Domain Anchors
+
+encoding:
+  # Selected strategy for categorical features:
+  # Options: 'target_encoder', 'one_hot', 'ordinal', 'catboost'
+  categorical_strategy: "target_encoder"
+  target_encoder_smoothing: 10.0
+  one_hot_max_categories: 10
+
+preprocessing:
+  clean_survey_codes: true    # Sanitize OECD reserved non-response codes (99, 999) before selection
+  numerical_imputer: "median" # 'median' or 'median_indicator'
+  categorical_imputer: "most_frequent"
+  scaler: "robust"            # 'standard', 'robust', or 'minmax'
