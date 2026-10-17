@@ -2,8 +2,11 @@
 
 # Datasets and intermediate data
 data/interim/*
+!data/interim/.gitkeep
 data/raw/*
+!data/raw/.gitkeep
 data/processed/*
+!data/processed/.gitkeep
 legacy/data/
 *.parquet
 *.sas7bdat
@@ -13,6 +16,7 @@ legacy/data/
 
 # Trained models and checkpoints
 models/*
+!models/.gitkeep
 legacy/models/
 *.pkl
 *.pt
@@ -36,6 +40,11 @@ venv/
 ENV/
 env/
 
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
 # IDE and OS
 .vscode/
 .idea/
@@ -46,3 +55,4 @@ Thumbs.db
 wandb/
 runs/
 *.log
+other/
