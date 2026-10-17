@@ -1,0 +1,36 @@
+# Central Pipeline Configuration
+
+data:
+  raw_dir: "data/raw"
+  sas_filename: "CY08MSP_STU_QQQ.SAS7BDAT"
+  sas_format_filename: "CY08MSP_STU_QQQ.FORMAT.SAS"
+  zip_filename: "STU_QQQ_SAS.zip"
+  download_url: "https://webfs.oecd.org/pisa2022/STU_QQQ_SAS.zip"
+  
+  interim_dir: "data/interim"
+  interim_parquet: "data/interim/pisa2022.parquet"
+  metadata_dict_path: "data/interim/pisa_metadata_dictionary.json"
+  
+  processed_dir: "data/processed"
+  train_parquet: "data/processed/train.parquet"
+  test_parquet: "data/processed/test.parquet"
+  train_balanced_parquet: "data/processed/train_balanced_tabrep.parquet"
+
+scope:
+  country_code: "ARG"
+  target_column: "PV1MATH"
+  threshold: 420.07  # PISA Level 2 threshold: < 420.07 is Class 0, >= 420.07 is Class 1
+
+split:
+  test_size: 0.20
+  random_state: 42
+  stratify: true
+
+outputs:
+  figures_dir: "outputs/figures"
+  tables_dir: "outputs/tables"
+  models_dir: "models"
+
+execution:
+  seed: 42
+  use_gpu: true
