@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  diffusion-academic-prediction:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pisa-diffusion:latest
+    container_name: pisa_diffusion_container
+    volumes:
+      - ./data:/workspace/data
+      - ./models:/workspace/models
+      - ./outputs:/workspace/outputs
+      - ./configs:/workspace/configs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    command: python run.py --step all
