@@ -145,10 +145,9 @@ class TabRepContinuousEncoder:
             self.quantile_transformer.fit(df[self.num_cols].values)
 
             # Register valid domain levels for discrete features
-            if discrete_cols is not None:
-                target_discrete = [c for c in discrete_cols if c in self.num_cols]
-                for col in target_discrete:
-                    self.discrete_levels[col] = np.sort(df[col].dropna().unique())
+            target_discrete = [c for c in resolved_disc if c in self.num_cols]
+            for col in target_discrete:
+                self.discrete_levels[col] = np.sort(df[col].dropna().unique())
 
             logger.info(f"Configured {len(self.discrete_levels)} discrete ordinal/binary features for post-diffusion snapping.")
 
@@ -156,7 +155,7 @@ class TabRepContinuousEncoder:
         self.category_sizes = []
         self.cat_mappings = {}
         for col in self.cat_cols:
-            cats = sorted(df[col].dropna().unique().tolist())
+            cats = sorted(df[col].dropna().astype(str).unique().tolist())
             if not cats:
                 cats = ["MISSING"]
             self.cat_mappings[col] = cats
@@ -184,7 +183,7 @@ class TabRepContinuousEncoder:
             for col in self.cat_cols:
                 cats = self.cat_mappings[col]
                 cat_to_idx = {c: i for i, c in enumerate(cats)}
-                col_idx = df[col].map(cat_to_idx).fillna(0).values.astype(np.int64)
+                col_idx = df[col].astype(str).map(cat_to_idx).fillna(0).values.astype(np.int64)
                 cat_indices_list.append(col_idx[:, None])
             cat_indices = np.hstack(cat_indices_list)
         else:

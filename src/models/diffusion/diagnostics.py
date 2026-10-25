@@ -206,10 +206,14 @@ def plot_distribution_audit(
     ax_oob.grid(True, linestyle="--", alpha=0.5)
 
     ax_corr = fig.add_subplot(gs[2, 2])
-    sub_feats = feature_metrics_df.sort_values(by="ks_stat")["feature"].head(10).tolist()
-    r_c = real_df[sub_feats].corr().values
-    s_c = synth_df[sub_feats].corr().values
-    diff_c = np.abs(r_c - s_c)
+    cand_feats = feature_metrics_df.sort_values(by="ks_stat")["feature"].tolist()
+    sub_feats = [f for f in cand_feats if np.issubdtype(real_df[f].dtype, np.number) and np.issubdtype(synth_df[f].dtype, np.number)][:10]
+    if len(sub_feats) >= 2:
+        r_c = real_df[sub_feats].corr().fillna(0.0).values
+        s_c = synth_df[sub_feats].corr().fillna(0.0).values
+        diff_c = np.abs(r_c - s_c)
+    else:
+        diff_c = np.zeros((1, 1))
     sns.heatmap(diff_c, ax=ax_corr, cmap="YlOrRd", vmin=0.0, vmax=0.25, cbar_kws={"label": "|Real - Synth| Corr"})
     ax_corr.set_title("Correlation Absolute Error (Top 10 Feats)", fontsize=12, fontweight="bold")
     ax_corr.set_xticks([])

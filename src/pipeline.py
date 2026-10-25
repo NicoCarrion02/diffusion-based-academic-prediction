@@ -16,7 +16,7 @@ from src.data.converter import convert_sas_to_parquet
 from src.data.loader import prepare_train_test_data
 from src.features.cleaner import clean_pisa_survey_codes, categorize_pisa_features
 from src.features.selector import FeatureSelector
-from src.features.preprocessor import TabularPreprocessor
+from src.features.preprocessor import TabularPreprocessor, NativeImputer, FeatureEncoderScaler
 from src.models.diffusion.balancer import DatasetBalancer
 from src.models.classifiers.random_forest import train_random_forest
 from src.models.classifiers.tabpfn_classifier import train_tabpfn
@@ -150,24 +150,20 @@ class MasterPipeline:
         cat_registry = categorize_pisa_features(X_train_sel, self.explorer)
         self.cat_registry_ = cat_registry
 
-        # Preprocessing and encoding
-        preprocessor = TabularPreprocessor(
-            categorical_strategy=enc_cfg["categorical_strategy"],
-            categorization=cat_registry,
-            scaler_type=prep_cfg["scaler"],
-            imputation_strategy=prep_cfg.get("numerical_imputer", "median"),
-            target_encoder_smoothing=enc_cfg["target_encoder_smoothing"],
-        )
-        X_train_proc = preprocessor.fit_transform(X_train_sel, y_train)
-        X_test_proc = preprocessor.transform(X_test_sel)
+        # Impute missing values in native space (preserves nominal strings and discrete integers)
+        imputer = NativeImputer(categorization=cat_registry)
+        X_train_proc = imputer.fit_transform(X_train_sel)
+        X_test_proc = imputer.transform(X_test_sel)
 
         processed_dir = Path(self.config["data"]["processed_dir"])
+        X_train_proc = X_train_proc.copy()
         X_train_proc["target"] = y_train.values
+        X_test_proc = X_test_proc.copy()
         X_test_proc["target"] = y_test.values
 
         X_train_proc.to_parquet(processed_dir / "train_selected.parquet", index=False)
         X_test_proc.to_parquet(processed_dir / "test_selected.parquet", index=False)
-        logger.info(f"Saved processed train/test datasets to {processed_dir}")
+        logger.info(f"Saved native processed train/test datasets to {processed_dir}")
 
         return X_train_proc, X_test_proc, selector.selected_features_
 
@@ -248,6 +244,34 @@ class MasterPipeline:
         X_train_bal = X_train_bal[feature_order]
         X_test = X_test[feature_order]
 
+        # Downstream Feature Encoding and Scaling
+        cat_reg = getattr(self, "cat_registry_", None)
+        if cat_reg is None:
+            from src.features.cleaner import categorize_pisa_features
+            cat_reg = categorize_pisa_features(X_train_unbal, self.explorer)
+            self.cat_registry_ = cat_reg
+
+        enc_cfg = self.feat_cfg["encoding"]
+        prep_cfg = self.feat_cfg["preprocessing"]
+
+        encoder_unbal = FeatureEncoderScaler(
+            categorical_strategy=enc_cfg["categorical_strategy"],
+            scaler_type=prep_cfg["scaler"],
+            target_encoder_smoothing=enc_cfg["target_encoder_smoothing"],
+            categorization=cat_reg,
+        )
+        X_train_unbal_enc = encoder_unbal.fit_transform(X_train_unbal, y_train_unbal)
+        X_test_unbal_enc = encoder_unbal.transform(X_test)
+
+        encoder_bal = FeatureEncoderScaler(
+            categorical_strategy=enc_cfg["categorical_strategy"],
+            scaler_type=prep_cfg["scaler"],
+            target_encoder_smoothing=enc_cfg["target_encoder_smoothing"],
+            categorization=cat_reg,
+        )
+        X_train_bal_enc = encoder_bal.fit_transform(X_train_bal, y_train_bal)
+        X_test_bal_enc = encoder_bal.transform(X_test)
+
         from src.models.diffusion.tabrep_adapter import set_seed
         set_seed(42)
 
@@ -260,9 +284,9 @@ class MasterPipeline:
 
         logger.info("--- Benchmark 1: Random Forest (Unbalanced Baseline) ---")
         rf_unbal, y_pred_rf1, y_prob_rf1, importances = train_random_forest(
-            X_train=X_train_unbal,
+            X_train=X_train_unbal_enc,
             y_train=y_train_unbal,
-            X_test=X_test,
+            X_test=X_test_unbal_enc,
             **rf_cfg,
         )
         m1 = evaluate_predictions(y_test, y_pred_rf1, y_prob_rf1, model_name="Random Forest (Unbalanced)")
@@ -273,9 +297,9 @@ class MasterPipeline:
 
         logger.info("--- Benchmark 2: Random Forest (TabRep Diffusion Balanced) ---")
         rf_bal, y_pred_rf2, y_prob_rf2, _ = train_random_forest(
-            X_train=X_train_bal,
+            X_train=X_train_bal_enc,
             y_train=y_train_bal,
-            X_test=X_test,
+            X_test=X_test_bal_enc,
             **rf_cfg,
         )
         m2 = evaluate_predictions(y_test, y_pred_rf2, y_prob_rf2, model_name="Random Forest (TabRep Balanced)")
@@ -287,9 +311,9 @@ class MasterPipeline:
         logger.info("--- Benchmark 3: XGBoost (Unbalanced Baseline) ---")
         xgb_cfg = self.model_cfg["classifiers"]["xgboost"]
         xgb_unbal, y_pred_xgb1, y_prob_xgb1 = train_xgboost(
-            X_train=X_train_unbal,
+            X_train=X_train_unbal_enc,
             y_train=y_train_unbal,
-            X_test=X_test,
+            X_test=X_test_unbal_enc,
             **xgb_cfg,
         )
         if y_pred_xgb1 is not None:
@@ -301,9 +325,9 @@ class MasterPipeline:
 
         logger.info("--- Benchmark 4: XGBoost (TabRep Diffusion Balanced) ---")
         xgb_bal, y_pred_xgb2, y_prob_xgb2 = train_xgboost(
-            X_train=X_train_bal,
+            X_train=X_train_bal_enc,
             y_train=y_train_bal,
-            X_test=X_test,
+            X_test=X_test_bal_enc,
             **xgb_cfg,
         )
         if y_pred_xgb2 is not None:
@@ -315,9 +339,9 @@ class MasterPipeline:
 
         logger.info("--- Benchmark 5: TabPFNv3 Tabular Foundation Model ---")
         tabpfn_model, y_pred_pfn, y_prob_pfn = train_tabpfn(
-            X_train=X_train_unbal,
+            X_train=X_train_unbal_enc,
             y_train=y_train_unbal,
-            X_test=X_test,
+            X_test=X_test_unbal_enc,
             device=self.model_cfg["classifiers"]["tabpfn"].get("device", "auto"),
             n_estimators=self.model_cfg["classifiers"]["tabpfn"].get("n_estimators", 4),
             random_state=self.model_cfg["classifiers"]["tabpfn"].get("random_state", 42),
@@ -330,6 +354,9 @@ class MasterPipeline:
             models_cm["TabPFNv3"] = (y_test.values, y_pred_pfn)
 
         res_df = format_metrics_table(results)
+        table_dir = Path(self.config["outputs"]["tables_dir"])
+        table_dir.mkdir(parents=True, exist_ok=True)
+        res_df.to_csv(table_dir / "benchmark_results.csv", index=False)
 
         fig_dir = Path(self.config["outputs"]["figures_dir"])
         plot_roc_curves(models_roc, str(fig_dir / "roc_curves.png"))
@@ -342,7 +369,8 @@ class MasterPipeline:
         try:
             best_model = xgb_bal if xgb_bal is not None else rf_bal
             best_prob = y_prob_xgb2 if xgb_bal is not None else y_prob_rf2
-            explainer, shap_values = compute_shap_explanations(best_model, X_test)
+            shap_X_test = X_test_bal_enc if xgb_bal is not None else X_test_unbal_enc
+            explainer, shap_values = compute_shap_explanations(best_model, shap_X_test)
             plot_shap_summary(shap_values, max_display=15, output_path=str(fig_dir / "shap_summary_beeswarm.png"))
             plot_shap_global_importance(shap_values, max_display=15, output_path=str(fig_dir / "shap_importance_bar.png"))
             plot_shap_waterfall_cases(shap_values, y_test.values, best_prob, output_dir=str(fig_dir), max_display=12)

@@ -178,6 +178,26 @@ def compare_models_cv(
 
         fold_seed = random_state + fold
 
+        # Determine whether encoding/scaling is needed
+        has_categorical = (
+            (categorization is not None and len(categorization.nominal_cols) > 0)
+            or (cat_cols is not None and len(cat_cols) > 0)
+            or any(not np.issubdtype(X.dtypes[c], np.number) for c in X.columns)
+        )
+
+        if has_categorical:
+            from src.features.preprocessor import FeatureEncoderScaler
+            enc_unbal = FeatureEncoderScaler(
+                categorization=categorization,
+                nominal_cols=cat_cols,
+                numerical_cols=num_cols,
+            )
+            X_tr_unbal_in = enc_unbal.fit_transform(X_tr, y_tr)
+            X_val_unbal_in = enc_unbal.transform(X_val)
+        else:
+            X_tr_unbal_in = X_tr
+            X_val_unbal_in = X_val
+
         # 1. Baseline Unbalanced Model
         if is_tabpfn:
             import random
@@ -194,9 +214,9 @@ def compare_models_cv(
                 n_estimators=tabpfn_estimators,
                 random_state=fold_seed,
             )
-            clf_unbal.fit(X_tr.values.astype(np.float32), y_tr.values.astype(int))
-            probs_unbal = clf_unbal.predict_proba(X_val.values.astype(np.float32))[:, 1]
-            preds_unbal = clf_unbal.predict(X_val.values.astype(np.float32))
+            clf_unbal.fit(X_tr_unbal_in.values.astype(np.float32), y_tr.values.astype(int))
+            probs_unbal = clf_unbal.predict_proba(X_val_unbal_in.values.astype(np.float32))[:, 1]
+            preds_unbal = clf_unbal.predict(X_val_unbal_in.values.astype(np.float32))
         else:
             fold_params = dict(default_params)
             fold_params["random_state"] = fold_seed
@@ -204,11 +224,11 @@ def compare_models_cv(
                 clf_unbal = XGBClassifier(**fold_params)
             else:
                 clf_unbal = RandomForestClassifier(**fold_params)
-            clf_unbal.fit(X_tr, y_tr)
-            probs_unbal = clf_unbal.predict_proba(X_val)[:, 1]
-            preds_unbal = clf_unbal.predict(X_val)
+            clf_unbal.fit(X_tr_unbal_in, y_tr)
+            probs_unbal = clf_unbal.predict_proba(X_val_unbal_in)[:, 1]
+            preds_unbal = clf_unbal.predict(X_val_unbal_in)
 
-        # 2. Balanced Model
+        # 2. Balanced Model (in native feature space)
         X_tr_bal, y_tr_bal = balance_fold_data(
             X_tr,
             y_tr,
@@ -220,6 +240,18 @@ def compare_models_cv(
             discrete_cols=discrete_cols,
             diffusion_config=diffusion_config,
         )
+
+        if has_categorical:
+            enc_bal = FeatureEncoderScaler(
+                categorization=categorization,
+                nominal_cols=cat_cols,
+                numerical_cols=num_cols,
+            )
+            X_tr_bal_in = enc_bal.fit_transform(X_tr_bal, y_tr_bal)
+            X_val_bal_in = enc_bal.transform(X_val)
+        else:
+            X_tr_bal_in = X_tr_bal
+            X_val_bal_in = X_val
 
         if is_tabpfn:
             import random
@@ -236,9 +268,9 @@ def compare_models_cv(
                 n_estimators=tabpfn_estimators,
                 random_state=fold_seed,
             )
-            clf_bal.fit(X_tr_bal.values.astype(np.float32), y_tr_bal.values.astype(int))
-            probs_bal = clf_bal.predict_proba(X_val.values.astype(np.float32))[:, 1]
-            preds_bal = clf_bal.predict(X_val.values.astype(np.float32))
+            clf_bal.fit(X_tr_bal_in.values.astype(np.float32), y_tr_bal.values.astype(int))
+            probs_bal = clf_bal.predict_proba(X_val_bal_in.values.astype(np.float32))[:, 1]
+            preds_bal = clf_bal.predict(X_val_bal_in.values.astype(np.float32))
         else:
             fold_params = dict(default_params)
             fold_params["random_state"] = random_state + fold
@@ -246,9 +278,9 @@ def compare_models_cv(
                 clf_bal = XGBClassifier(**fold_params)
             else:
                 clf_bal = RandomForestClassifier(**fold_params)
-            clf_bal.fit(X_tr_bal, y_tr_bal)
-            probs_bal = clf_bal.predict_proba(X_val)[:, 1]
-            preds_bal = clf_bal.predict(X_val)
+            clf_bal.fit(X_tr_bal_in, y_tr_bal)
+            probs_bal = clf_bal.predict_proba(X_val_bal_in)[:, 1]
+            preds_bal = clf_bal.predict(X_val_bal_in)
 
         unbal_scores["ROC-AUC"].append(float(roc_auc_score(y_val, probs_unbal)))
         unbal_scores["F1 (High Performing)"].append(float(f1_score(y_val, preds_unbal, pos_label=1)))

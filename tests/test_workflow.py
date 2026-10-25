@@ -13,7 +13,7 @@ import pytest
 from src.data.metadata_explorer import PISAMetadataExplorer
 from src.features.cleaner import clean_pisa_survey_codes, categorize_pisa_features
 from src.features.selector import FeatureSelector
-from src.features.preprocessor import TabularPreprocessor
+from src.features.preprocessor import TabularPreprocessor, NativeImputer, FeatureEncoderScaler
 from src.features.encoders import FrequencyEncoder, CatConverterEncoder, build_categorical_encoder
 from src.models.diffusion.tabrep_adapter import TabRepContinuousEncoder, TabRepDiffusionModel
 from src.models.classifiers.random_forest import train_random_forest
@@ -136,6 +136,38 @@ def test_preprocessor(synthetic_pisa_data, metadata_explorer):
     prep_empty = TabularPreprocessor()
     with pytest.raises(ValueError, match="requires explicit column lists"):
         prep_empty.fit(X, y)
+
+
+def test_native_imputer_and_feature_encoder_scaler(synthetic_pisa_data, metadata_explorer):
+    X = synthetic_pisa_data.drop(columns=["target"]).copy()
+    y = synthetic_pisa_data["target"]
+    reg = categorize_pisa_features(X, metadata_explorer)
+
+    # Introduce missing values in both numerical and nominal columns
+    X_missing = X.copy()
+    X_missing.loc[0:5, "ESCS"] = np.nan
+    X_missing.loc[3:8, "PROGN"] = np.nan
+
+    # Test NativeImputer
+    imputer = NativeImputer(categorization=reg)
+    X_imp = imputer.fit_transform(X_missing)
+    assert X_imp["ESCS"].isnull().sum() == 0
+    assert X_imp["PROGN"].isnull().sum() == 0
+    assert (X_imp.loc[3:8, "PROGN"] == "MISSING").all()
+    assert np.issubdtype(X_imp["ESCS"].dtype, np.number)
+    assert isinstance(X_imp["PROGN"].iloc[0], str)
+
+    # Test FeatureEncoderScaler
+    encoder_scaler = FeatureEncoderScaler(
+        categorical_strategy="target_encoder",
+        categorization=reg,
+        scaler_type="robust",
+    )
+    X_enc = encoder_scaler.fit_transform(X_imp, y)
+    assert X_enc.isnull().sum().sum() == 0
+    assert X_enc.shape[0] == len(X)
+    assert np.issubdtype(X_enc["ESCS"].dtype, np.floating)
+    assert np.issubdtype(X_enc["PROGN"].dtype, np.floating)
 
 
 def test_tabrep_encoder_and_model(synthetic_pisa_data, metadata_explorer):
