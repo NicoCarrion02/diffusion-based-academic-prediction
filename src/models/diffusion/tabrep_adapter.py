@@ -1,14 +1,36 @@
 """
 TabRep Continuous Generative Architecture for Tabular Data.
-Faithfully implements the official TabRep methodology (Si et al., arXiv:2504.04798):
-1. Continuous Representation:
-   - Numerical features: Normal-distributed Quantile Transformation.
-   - Categorical features: CatConverter (2D circular PSK unit-circle embedding).
-2. Generative Model:
-   - Conditional Flow Matching (CFM) on continuous unified data manifold.
-   - Deterministic ODE sampling (Heun / Euler numerical integration).
+Faithfully implements the official TabRep-Flow methodology (Si et al., arXiv:2504.04798,
+official repository: https://github.com/jacobyhsi/TabRep):
+
+Original TabRep Components (Preserved Verbatim):
+1. Unified Continuous Representation:
+   - Numerical features: sklearn QuantileTransformer(output_distribution='normal',
+     n_quantiles=max(min(N // 30, 1000), 10), subsample=1_000_000_000, random_state=seed)
+     and exact .inverse_transform().
+   - Categorical features: CatConverter 2D unit-circle Phase-Shift Keying (PSK)
+     via convert_psk (sin/cos roots of unity) and psk2cat (atan2 angular decoding).
+2. Generative Flow Matching Backbone & Training:
+   - Linear Conditional Flow Matching (CFM) path: x_t = t * x_1 + (1 - t) * x_0,
+     target velocity u_t = x_1 - x_0, unweighted MSE objective ||v_theta(x_t, t) - u_t||_2^2.
+   - Official TabSYN / TabDDPM feed-forward velocity MLP (TabRepFlowMLP):
+     Linear(d_in, dim_t) + SinusoidalTimeEmbedding MLP (dim_t=1024), followed by
+     4-layer feed-forward MLP [1024, 2048, 2048, 1024] with ReLU activations,
+     dropout=0.0, and no LayerNorm.
+   - Adam optimizer (weight_decay=5e-4) with ReduceLROnPlateau scheduler and
+     best-loss checkpoint restoration.
+   - Deterministic 50-step ODE numerical integration over t in [0, 1] (Euler / Heun).
+
+Dataset / Task-Specific Adaptations for OECD PISA 2022 (Explicitly Isolated):
+- snap_discrete_levels (bool, default=True): Post-QuantileTransformer inverse-transform
+  nearest-domain snapping for PISA ordinal Likert scales and binary indicators so
+  synthesized item responses match valid OECD questionnaire scale codes. Can be disabled
+  (snap_discrete_levels=False) for pure continuous-output ablations.
+- Explicit "MISSING" string token fallback for unseen nominal categories during transform().
+- Minority-class (Class 1) synthesis scope orchestrated upstream by DatasetBalancer.
 """
 
+import copy
 import math
 import logging
 import random
@@ -39,7 +61,7 @@ def set_seed(seed: int = 42):
 
 def convert_psk(cat_tensor: torch.Tensor, category_sizes: List[int]) -> torch.Tensor:
     """
-    CatConverter Phase-Shift Keying (PSK) encoding from official TabRep.
+    CatConverter Phase-Shift Keying (PSK) encoding from official TabRep (jacobyhsi/TabRep).
     Maps discrete category indices k in {0, ..., K-1} to 2D unit circle (sin, cos).
     """
     device = cat_tensor.device
@@ -52,7 +74,7 @@ def convert_psk(cat_tensor: torch.Tensor, category_sizes: List[int]) -> torch.Te
 
 def psk2cat(psk_tensor: torch.Tensor, category_sizes: List[int]) -> torch.Tensor:
     """
-    CatConverter PSK decoding from official TabRep.
+    CatConverter PSK decoding from official TabRep (jacobyhsi/TabRep).
     Inverts 2D (sin, cos) continuous coordinates back to discrete category indices using atan2.
     """
     device = psk_tensor.device
@@ -74,17 +96,23 @@ def psk2cat(psk_tensor: torch.Tensor, category_sizes: List[int]) -> torch.Tensor
 
 class TabRepContinuousEncoder:
     """
-    Unified Continuous Tabular Representation:
-    - Continuous features: QuantileTransformer(output_distribution='normal').
-    - Categorical features: CatConverter (2D circular PSK phases).
+    Unified Continuous Tabular Representation (Official TabRep):
+    - Numerical features: sklearn QuantileTransformer(output_distribution='normal').
+    - Categorical features: CatConverter integer indexing for 2D circular PSK phases.
+
+    Dataset-specific adaptation (isolated & optional):
+    - snap_discrete_levels: When True, snaps inverted ordinal/binary survey items back to
+      their observed valid OECD scale levels after QuantileTransformer.inverse_transform().
     """
-    def __init__(self, random_state: int = 42):
+    def __init__(self, random_state: int = 42, snap_discrete_levels: bool = True):
         self.random_state = random_state
+        self.snap_discrete_levels = snap_discrete_levels
         self.feature_names: List[str] = []
         self.num_cols: List[str] = []
         self.cat_cols: List[str] = []
         self.category_sizes: List[int] = []
-        self.cat_mappings: Dict[str, List] = {}
+        self.cat_mappings: Dict[str, List[str]] = {}
+        self.discrete_levels: Dict[str, np.ndarray] = {}
         self.quantile_transformer: Optional[QuantileTransformer] = None
         self.is_fitted: bool = False
 
@@ -131,7 +159,7 @@ class TabRepContinuousEncoder:
             f"{len(self.cat_cols)} nominal categorical features."
         )
 
-        # Fit numerical quantile transformer with adaptive quantiles
+        # Official TabRep numerical representation: QuantileTransformer -> N(0, 1)
         self.discrete_levels = {}
         if self.num_cols:
             N = len(df)
@@ -139,19 +167,22 @@ class TabRepContinuousEncoder:
             self.quantile_transformer = QuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=n_quantiles,
-                subsample=1_000_000,
+                subsample=1_000_000_000,
                 random_state=self.random_state,
             )
             self.quantile_transformer.fit(df[self.num_cols].values)
 
-            # Register valid domain levels for discrete features
-            target_discrete = [c for c in resolved_disc if c in self.num_cols]
-            for col in target_discrete:
-                self.discrete_levels[col] = np.sort(df[col].dropna().unique())
+            # Dataset-specific PISA adaptation: record valid domain levels for ordinal/binary scales
+            if self.snap_discrete_levels:
+                target_discrete = [c for c in resolved_disc if c in self.num_cols]
+                for col in target_discrete:
+                    self.discrete_levels[col] = np.sort(df[col].dropna().unique())
+                logger.info(
+                    f"[PISA Adaptation] Configured {len(self.discrete_levels)} discrete ordinal/binary "
+                    f"features for post-inversion domain snapping."
+                )
 
-            logger.info(f"Configured {len(self.discrete_levels)} discrete ordinal/binary features for post-diffusion snapping.")
-
-        # Fit categorical mappings
+        # Official CatConverter vocabulary indexing
         self.category_sizes = []
         self.cat_mappings = {}
         for col in self.cat_cols:
@@ -167,23 +198,31 @@ class TabRepContinuousEncoder:
     def transform(self, df: pd.DataFrame) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
         Transforms DataFrame to (continuous_numerical_array, discrete_categorical_indices).
+        Unseen categorical tokens (if transform is called on external cohorts) fall back
+        to 'MISSING' when present in the fitted vocabulary, else index 0.
         """
         if not self.is_fitted:
             raise ValueError("TabRepContinuousEncoder must be fitted before calling transform.")
 
-        # Numerical transform to N(0, 1)
         if self.num_cols:
             num_norm = self.quantile_transformer.transform(df[self.num_cols].values).astype(np.float32)
         else:
             num_norm = np.empty((len(df), 0), dtype=np.float32)
 
-        # Categorical transform to integer indices
         if self.cat_cols:
             cat_indices_list = []
             for col in self.cat_cols:
                 cats = self.cat_mappings[col]
                 cat_to_idx = {c: i for i, c in enumerate(cats)}
-                col_idx = df[col].astype(str).map(cat_to_idx).fillna(0).values.astype(np.int64)
+                fallback_idx = cat_to_idx.get("MISSING", 0)
+                mapped = df[col].fillna("MISSING").astype(str).map(cat_to_idx)
+                n_unseen = int(mapped.isna().sum())
+                if n_unseen > 0:
+                    logger.debug(
+                        f"TabRepContinuousEncoder.transform: mapped {n_unseen} unseen category tokens "
+                        f"in '{col}' to fallback index {fallback_idx} ('{cats[fallback_idx]}')."
+                    )
+                col_idx = mapped.fillna(fallback_idx).values.astype(np.int64)
                 cat_indices_list.append(col_idx[:, None])
             cat_indices = np.hstack(cat_indices_list)
         else:
@@ -193,8 +232,10 @@ class TabRepContinuousEncoder:
 
     def inverse_transform(self, num_norm: np.ndarray, cat_indices: Optional[np.ndarray] = None) -> pd.DataFrame:
         """
-        Inverts continuous representation back to original tabular space.
-        Guarantees strict support preservation via CDF quantile inversion and PSK modulo mapping.
+        Inverts continuous representation back to original tabular space using official
+        QuantileTransformer.inverse_transform() and CatConverter index lookup.
+        Applies optional nearest-level snapping only to registered discrete survey items
+        when snap_discrete_levels=True.
         """
         data_dict = {}
 
@@ -202,7 +243,7 @@ class TabRepContinuousEncoder:
             num_orig = self.quantile_transformer.inverse_transform(num_norm)
             for i, col in enumerate(self.num_cols):
                 col_vals = num_orig[:, i]
-                if hasattr(self, "discrete_levels") and col in self.discrete_levels:
+                if self.snap_discrete_levels and col in self.discrete_levels:
                     levels = self.discrete_levels[col]
                     dists = np.abs(col_vals[:, None] - levels[None, :])
                     nearest_idx = np.argmin(dists, axis=1)
@@ -220,7 +261,7 @@ class TabRepContinuousEncoder:
 
 
 class SinusoidalTimeEmbedding(nn.Module):
-    """Sinusoidal positional embedding for continuous flow time steps."""
+    """Sinusoidal positional embedding for continuous flow time t in [0, 1]."""
     def __init__(self, embedding_dim: int):
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -229,7 +270,8 @@ class SinusoidalTimeEmbedding(nn.Module):
         if timesteps.dim() == 0:
             timesteps = timesteps.unsqueeze(0)
         half_dim = self.embedding_dim // 2
-        emb_factor = math.log(10000) / (half_dim - 1)
+        denom = max(half_dim - 1, 1)
+        emb_factor = math.log(10000.0) / denom
         freqs = torch.exp(-emb_factor * torch.arange(half_dim, dtype=torch.float32, device=timesteps.device))
         args = timesteps.float()[:, None] * freqs[None, :]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
@@ -238,8 +280,54 @@ class SinusoidalTimeEmbedding(nn.Module):
         return embedding
 
 
+class TabRepFlowMLP(nn.Module):
+    """
+    Official TabRep-Flow / TabSYN feed-forward velocity network (MLPDiffusion).
+    Matches Si et al. (arXiv:2504.04798, Appendix D.4 / Table 5) & jacobyhsi/TabRep:
+    - Input projection Linear(input_dim, dim_t) summed once with SinusoidalTimeEmbedding MLP (dim_t=1024).
+    - 4-layer feed-forward MLP [1024, 2048, 2048, 1024] with ReLU activations,
+      dropout=0.0, and no LayerNorm or per-block residual skip connections.
+    """
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dims: List[int] = [1024, 2048, 2048, 1024],
+        dim_t: int = 1024,
+        dropout: float = 0.0,
+        activation: str = "relu",
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.dim_t = dim_t
+        self.proj = nn.Linear(input_dim, dim_t)
+        self.time_embed = nn.Sequential(
+            SinusoidalTimeEmbedding(dim_t),
+            nn.Linear(dim_t, dim_t),
+            nn.SiLU(),
+            nn.Linear(dim_t, dim_t),
+        )
+
+        act_cls = nn.ReLU if activation.lower() == "relu" else nn.SiLU
+        layers: List[nn.Module] = []
+        prev_dim = dim_t
+        for h_dim in hidden_dims:
+            layers.append(nn.Linear(prev_dim, h_dim))
+            layers.append(act_cls())
+            if dropout > 0.0:
+                layers.append(nn.Dropout(dropout))
+            prev_dim = h_dim
+        layers.append(nn.Linear(prev_dim, input_dim))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        if t.dim() == 0:
+            t = t.repeat(x.size(0))
+        h = self.proj(x) + self.time_embed(t)
+        return self.mlp(h)
+
+
 class FlowResidualBlock(nn.Module):
-    """Residual dense block with time-step conditioning and layer normalization."""
+    """Legacy residual dense block retained solely for optional ablation/backwards compatibility."""
     def __init__(self, in_features: int, out_features: int, time_emb_dim: int, dropout: float = 0.1):
         super().__init__()
         self.fc1 = nn.Linear(in_features, out_features)
@@ -259,7 +347,7 @@ class FlowResidualBlock(nn.Module):
 
 
 class MLPFlowNet(nn.Module):
-    """Velocity prediction network v_theta(x_t, t) for Conditional Flow Matching."""
+    """Legacy residual velocity network retained solely for optional backwards compatibility."""
     def __init__(
         self,
         input_dim: int,
@@ -294,22 +382,34 @@ class MLPFlowNet(nn.Module):
 
 class TabRepDiffusionModel:
     """
-    TabRep tabular generative model combining:
-    - Quantile Normalization & CatConverter PSK continuous representations
-    - Conditional Flow Matching (CFM) vector field training
-    - High-order numerical ODE integration (Heun / Euler)
+    Official TabRep-Flow generative model combining:
+    - QuantileTransformer(output_distribution='normal') & 2D CatConverter PSK representations
+    - Feed-forward MLPDiffusion velocity backbone (TabRepFlowMLP) trained via linear CFM
+    - Adam + ReduceLROnPlateau + best-loss checkpoint restoration
+    - Deterministic 50-step ODE integration (Heun / Euler)
     """
     def __init__(
         self,
         num_timesteps: int = 50,
-        hidden_dims: List[int] = [256, 512, 256],
-        dropout: float = 0.1,
+        hidden_dims: Optional[List[int]] = None,
+        dim_t: int = 1024,
+        dropout: float = 0.0,
+        activation: str = "relu",
+        architecture: str = "tabrep_mlp",
+        snap_discrete_levels: bool = True,
         device: Optional[str] = None,
         random_state: int = 42,
     ):
         self.num_timesteps = num_timesteps
-        self.hidden_dims = hidden_dims
+        self.architecture = architecture.lower()
+        if hidden_dims is None:
+            self.hidden_dims = [1024, 2048, 2048, 1024] if self.architecture == "tabrep_mlp" else [256, 512, 256]
+        else:
+            self.hidden_dims = list(hidden_dims)
+        self.dim_t = dim_t
         self.dropout = dropout
+        self.activation = activation
+        self.snap_discrete_levels = snap_discrete_levels
         self.random_state = random_state
 
         if device is None:
@@ -317,14 +417,22 @@ class TabRepDiffusionModel:
         else:
             self.device = torch.device(device)
 
-        logger.info(f"TabRep Flow initialized on device: {self.device} (seed: {self.random_state})")
+        logger.info(
+            f"TabRep-Flow ({self.architecture}, hidden={self.hidden_dims}) initialized on "
+            f"device: {self.device} (seed: {self.random_state})"
+        )
         set_seed(self.random_state)
 
-        self.encoder = TabRepContinuousEncoder(random_state=self.random_state)
-        self.network: Optional[MLPFlowNet] = None
+        self.encoder = TabRepContinuousEncoder(
+            random_state=self.random_state,
+            snap_discrete_levels=self.snap_discrete_levels,
+        )
+        self.network: Optional[nn.Module] = None
         self.continuous_dim: int = 0
         self.num_numerical_features: int = 0
         self.category_sizes: List[int] = []
+        self.loss_history_: List[float] = []
+        self.best_loss_: float = float("inf")
 
     def fit(
         self,
@@ -333,10 +441,13 @@ class TabRepDiffusionModel:
         num_cols: Optional[List[str]] = None,
         discrete_cols: Optional[List[str]] = None,
         categorization: Optional[Any] = None,
-        epochs: int = 50,
-        batch_size: int = 128,
+        epochs: int = 600,
+        batch_size: int = 512,
         lr: float = 0.001,
-        weight_decay: float = 1e-5,
+        weight_decay: float = 5e-4,
+        lr_scheduler_factor: float = 0.9,
+        lr_scheduler_patience: int = 30,
+        restore_best: bool = True,
     ) -> "TabRepDiffusionModel":
         """
         Fit TabRep continuous representation and train Flow Matching velocity field.
@@ -353,7 +464,6 @@ class TabRepDiffusionModel:
         self.num_numerical_features = len(self.encoder.num_cols)
         self.category_sizes = self.encoder.category_sizes
 
-        # Transform data into continuous representation
         num_norm, cat_indices = self.encoder.transform(df)
         tensors = []
         if self.num_numerical_features > 0:
@@ -373,18 +483,46 @@ class TabRepDiffusionModel:
             f"Categorical PSK: {self.continuous_dim - self.num_numerical_features})"
         )
 
-        self.network = MLPFlowNet(
-            input_dim=self.continuous_dim,
-            hidden_dims=self.hidden_dims,
-            dropout=self.dropout,
-        ).to(self.device)
+        if self.architecture == "tabrep_mlp":
+            self.network = TabRepFlowMLP(
+                input_dim=self.continuous_dim,
+                hidden_dims=self.hidden_dims,
+                dim_t=self.dim_t,
+                dropout=self.dropout,
+                activation=self.activation,
+            ).to(self.device)
+        elif self.architecture == "residual_mlp":
+            self.network = MLPFlowNet(
+                input_dim=self.continuous_dim,
+                hidden_dims=self.hidden_dims,
+                dropout=self.dropout,
+            ).to(self.device)
+        else:
+            raise ValueError(f"Unsupported TabRep architecture '{self.architecture}'. Expected 'tabrep_mlp' or 'residual_mlp'.")
 
         dataset = TensorDataset(continuous_data)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
-        optimizer = torch.optim.AdamW(self.network.parameters(), lr=lr, weight_decay=weight_decay)
+        gen = torch.Generator()
+        gen.manual_seed(self.random_state)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False, generator=gen)
+
+        optimizer = torch.optim.Adam(self.network.parameters(), lr=lr, weight_decay=weight_decay)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=lr_scheduler_factor,
+            patience=lr_scheduler_patience,
+        )
 
         self.network.train()
-        logger.info(f"Starting TabRep Flow Matching training ({epochs} epochs, batch_size={batch_size})...")
+        self.loss_history_ = []
+        self.best_loss_ = float("inf")
+        best_state: Optional[Dict[str, torch.Tensor]] = None
+        log_interval = max(epochs // 10, 10)
+
+        logger.info(
+            f"Starting Official TabRep-Flow training ({epochs} epochs, batch_size={batch_size}, "
+            f"lr={lr}, weight_decay={weight_decay})..."
+        )
 
         for epoch in range(1, epochs + 1):
             total_loss = 0.0
@@ -392,19 +530,12 @@ class TabRepDiffusionModel:
                 batch_x1 = batch_x1.to(self.device)
                 bs = batch_x1.size(0)
 
-                # Prior Gaussian noise x0 ~ N(0, I)
                 x0 = torch.randn_like(batch_x1)
-
-                # Uniformly sample flow time t in [0, 1]
                 t = torch.rand(bs, device=self.device)
 
-                # Linear probability path: x_t = t * x1 + (1 - t) * x0
                 xt = t[:, None] * batch_x1 + (1.0 - t[:, None]) * x0
-
-                # Target velocity field: u_t = x1 - x0
                 ut = batch_x1 - x0
 
-                # Predict velocity
                 vt = self.network(xt, t)
                 loss = F.mse_loss(vt, ut)
 
@@ -416,10 +547,26 @@ class TabRepDiffusionModel:
                 total_loss += loss.item() * bs
 
             avg_loss = total_loss / len(dataset)
-            if epoch % 10 == 0 or epoch == 1 or epoch == epochs:
-                logger.info(f"TabRep Flow Epoch [{epoch}/{epochs}] - CFM Loss: {avg_loss:.5f}")
+            self.loss_history_.append(float(avg_loss))
+            scheduler.step(avg_loss)
 
-        logger.info("TabRep Flow Matching training complete.")
+            if avg_loss < self.best_loss_:
+                self.best_loss_ = float(avg_loss)
+                if restore_best:
+                    best_state = {k: v.detach().cpu().clone() for k, v in self.network.state_dict().items()}
+
+            if epoch % log_interval == 0 or epoch == 1 or epoch == epochs:
+                cur_lr = optimizer.param_groups[0]["lr"]
+                logger.info(
+                    f"TabRep-Flow Epoch [{epoch}/{epochs}] - CFM Loss: {avg_loss:.5f} "
+                    f"(Best: {self.best_loss_:.5f}, LR: {cur_lr:.6f})"
+                )
+
+        if restore_best and best_state is not None:
+            self.network.load_state_dict({k: v.to(self.device) for k, v in best_state.items()})
+            logger.info(f"TabRep-Flow training complete. Restored best velocity field (Loss={self.best_loss_:.5f}).")
+        else:
+            logger.info("TabRep-Flow training complete.")
         return self
 
     @torch.no_grad()
@@ -428,30 +575,37 @@ class TabRepDiffusionModel:
         num_samples: int,
         steps: Optional[int] = None,
         solver: str = "heun",
-        batch_size: int = 256,
+        batch_size: int = 512,
+        seed: Optional[int] = None,
     ) -> pd.DataFrame:
         """
-        Sample synthetic tabular records by integrating the Flow Matching ODE.
-        Supports 'heun' (2nd order Runge-Kutta) and 'euler' (1st order) solvers.
+        Sample synthetic tabular records by integrating the Flow Matching ODE over t in [0, 1].
+        Supports 'heun' (2nd-order Runge-Kutta) and 'euler' (1st-order) solvers.
         """
         if self.network is None:
             raise ValueError("TabRep model must be fitted before sampling.")
 
+        if seed is not None:
+            set_seed(seed)
+
         self.network.eval()
         N_steps = steps if steps is not None else self.num_timesteps
+        solver_key = solver.lower()
+        if solver_key not in ("heun", "euler"):
+            raise ValueError(f"Unsupported ODE solver '{solver}'. Expected 'heun' or 'euler'.")
+
         logger.info(
-            f"Generating {num_samples} synthetic samples using TabRep Flow ODE "
-            f"(solver={solver}, steps={N_steps}) on {self.device}..."
+            f"Generating {num_samples} synthetic samples using TabRep-Flow ODE "
+            f"(solver={solver_key}, steps={N_steps}) on {self.device}..."
         )
 
         all_num_samples = []
         all_cat_samples = []
         remaining = num_samples
 
-        with tqdm(total=num_samples, desc="TabRep ODE Sampling") as pbar:
+        with tqdm(total=num_samples, desc="TabRep ODE Sampling", disable=num_samples < 500) as pbar:
             while remaining > 0:
                 cur_bs = min(remaining, batch_size)
-                # Sample prior noise z0 ~ N(0, I)
                 z = torch.randn((cur_bs, self.continuous_dim), device=self.device)
                 dt = 1.0 / N_steps
 
@@ -460,8 +614,7 @@ class TabRepDiffusionModel:
                     t_vec = torch.full((cur_bs,), t_curr, device=self.device)
                     vt = self.network(z, t_vec)
 
-                    if solver == "heun":
-                        # Heun predictor-corrector step (2nd order Runge-Kutta)
+                    if solver_key == "heun":
                         t_next = min((step_idx + 1) / N_steps, 1.0)
                         t_next_vec = torch.full((cur_bs,), t_next, device=self.device)
                         z_pred = z + vt * dt
@@ -470,7 +623,6 @@ class TabRepDiffusionModel:
 
                     z = z + vt * dt
 
-                # Split continuous latent vector into numerical and categorical PSK components
                 if self.num_numerical_features > 0:
                     syn_num = z[:, :self.num_numerical_features].cpu().numpy()
                     all_num_samples.append(syn_num)
