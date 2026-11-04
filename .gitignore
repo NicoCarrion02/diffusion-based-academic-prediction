@@ -7,7 +7,6 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
-legacy/data/
 *.parquet
 *.sas7bdat
 *.SAS7BDAT
@@ -15,9 +14,6 @@ legacy/data/
 *.csv.gz
 
 # Trained models and checkpoints
-models/*
-!models/.gitkeep
-legacy/models/
 *.pkl
 *.pt
 *.pth
