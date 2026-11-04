@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   diffusion-academic-prediction:
     build:
@@ -9,12 +7,13 @@ services:
     container_name: pisa_diffusion_container
     volumes:
       - ./data:/workspace/data
-      - ./models:/workspace/models
       - ./outputs:/workspace/outputs
       - ./configs:/workspace/configs
     environment:
       - PYTHONUNBUFFERED=1
       - CUDA_VISIBLE_DEVICES=0
+      - TABPFN_TOKEN=${TABPFN_TOKEN:-}
+      - HF_TOKEN=${HF_TOKEN:-}
     deploy:
       resources:
         reservations:
