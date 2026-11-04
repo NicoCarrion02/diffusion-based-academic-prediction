@@ -23,9 +23,10 @@ COPY requirements.txt /workspace/requirements.txt
 RUN pip install --upgrade pip setuptools wheel && \
     pip install -r /workspace/requirements.txt
 
-# Copy source code and configuration
+# Copy source code, configuration, and unit tests
 COPY configs/ /workspace/configs/
 COPY src/ /workspace/src/
+COPY tests/ /workspace/tests/
 COPY run.py /workspace/run.py
 COPY README.md /workspace/README.md
 
