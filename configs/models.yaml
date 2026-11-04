@@ -1,22 +1,27 @@
-# Model Configurations: Diffusion Balancing, Random Forest, TabPFNv3
+# Model Configurations: Official TabRep-Flow, Downstream Classifiers, Nested CV & Selection
 
 diffusion:
-  strategy: "minority_generation" # Synthesize minority class (Class 1) to balance 1:1
-  model_type: "tabrep"            # TabRep with CatConverter unit circle embedding
+  strategy: "minority_generation" # Synthesize minority class (Class 1) to balance training data 1:1
+  model_type: "tabrep"            # Official TabRep-Flow (Si et al., arXiv:2504.04798)
+  snap_discrete_levels: true      # PISA adaptation: snap ordinal/binary scales back to observed levels
   cat_converter:
-    dim: 2                        # Sine/Cosine phase space
+    dim: 2                        # 2D unit-circle Phase-Shift Keying (cos(2*pi*i/K), sin(2*pi*i/K))
   network:
-    hidden_dims: [256, 512, 256]
-    dropout: 0.10
-    activation: "silu"
+    architecture: "tabrep_mlp"    # Official TabRep-Flow MLP: PositionalEmbedding + 4-block Linear+ReLU
+    dim_t: 1024
+    hidden_dims: [1024, 2048, 2048, 1024]
+    dropout: 0.0
+    activation: "relu"
   training:
-    epochs: 60
-    batch_size: 128
+    epochs: 600                   # Full training split synthesis (~49s on RTX 2060 Max-Q)
+    cv_epochs: 500                # Intra-fold CV synthesis (~41s per split)
+    batch_size: 512
     learning_rate: 0.001
-    weight_decay: 0.00001
+    weight_decay: 0.0005          # Official TabRep-Flow Adam weight decay (5e-4)
+    lr_scheduler_factor: 0.9
+    lr_scheduler_patience: 30
     timesteps: 50
-    solver: "heun"
-    early_stopping_patience: 10
+    solver: "heun"                # Second-order midpoint/Heun ODE integrator
 
 classifiers:
   random_forest:
@@ -28,23 +33,52 @@ classifiers:
     random_state: 42
     n_jobs: -1
 
-  tabpfn:
-    model_version: "v3"
-    device: "cuda"
-    random_state: 42
-    thinking_mode: false
-
   xgboost:
     n_estimators: 250
     max_depth: 6
     learning_rate: 0.05
     subsample: 0.85
     colsample_bytree: 0.85
+    tree_method: "hist"
     random_state: 42
     eval_metric: "logloss"
+    n_jobs: -1
+
+  tabpfn:
+    device: "auto"
+    n_estimators: 4               # Safe <=6.4 GB VRAM ensemble size for N~8k-13k x 100
+    softmax_temperature: 0.9
+    average_before_softmax: false
+    balance_probabilities: false
+    ignore_pretraining_limits: true
+    memory_saving_mode: "auto"
+    random_state: 42
+
+selection:
+  mode: "auto"                    # 'auto' (rank all candidates) or 'manual' (explicit --model)
+  regime: "both"                  # 'both', 'unbalanced', or 'balanced'
+  primary_metric: "f1_high_performing"
+  tie_breakers:
+    - "balanced_accuracy"
+    - "pr_auc"
+    - "roc_auc"
+
+tuning:
+  strategy: "tpe"                 # 'tpe' (Optuna Multivariate TPE), 'random', or 'none' (--no-tune)
+  outer_cv_folds: 5
+  inner_cv_folds: 1               # 1 = stratified 80/20 inner split inside each outer training fold
+  inner_val_ratio: 0.20
+  n_trials:
+    random_forest: 20
+    xgboost: 25
+    tabpfn: 30
+  tabpfn_grid:
+    n_estimators: [1, 2, 4]
+    softmax_temperature: [0.75, 0.85, 0.90, 1.00, 1.10]
+    average_before_softmax: [false, true]
 
 validation:
   cv_folds: 5
   stratified: true
   random_state: 42
-  evaluate_tabpfn_cv: false
+  evaluate_tabpfn_cv: false       # Set true (or pass --mode manual --model tabpfn) on GPU servers

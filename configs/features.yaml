@@ -1,20 +1,19 @@
-# Feature Engineering and Selection Configuration
+# Feature Engineering, Selection, and Leakage-Free Encoding Configuration
 
 selection:
-  target_k: 100               # First benchmark target dimension
-  max_missing_ratio: 0.50     # Drop columns with >50% missing values
-  variance_threshold: 0.005   # Drop near-zero variance features
-  method: "hybrid_importance" # Combines Mutual Information, Tree Importance, and Domain Anchors
+  target_k: 100                  # Top-k benchmark feature space (fitted inside each CV split)
+  max_missing_ratio: 0.50        # Drop columns with >50% missing values on training split
+  variance_threshold: 0.005      # Drop near-zero variance numeric columns on training split
+  method: "hybrid_importance"    # 'hybrid_importance' (MI + ExtraTrees + Domain Anchors) or 'domain_anchors'
 
 encoding:
-  # Selected strategy for categorical features:
-  # Options: 'target_encoder', 'one_hot', 'ordinal', 'catboost'
+  # Downstream classifier encoding fitted strictly on REAL training rows (X_tr, y_tr):
+  # Options: 'target_encoder', 'frequency', 'one_hot', 'cat_converter'
   categorical_strategy: "target_encoder"
   target_encoder_smoothing: 10.0
-  one_hot_max_categories: 10
 
 preprocessing:
-  clean_survey_codes: true    # Sanitize OECD reserved non-response codes (99, 999) before selection
-  numerical_imputer: "median" # 'median' or 'median_indicator'
-  categorical_imputer: "most_frequent"
-  scaler: "robust"            # 'standard', 'robust', or 'minmax'
+  clean_survey_codes: true       # Metadata-driven sanitization of OECD non-response codes before splitting/selection
+  numerical_imputer: "median"    # Training-split median via NativeImputer
+  nominal_missing_token: "MISSING"
+  scaler: "robust"               # 'robust' or 'standard'
