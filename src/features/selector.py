@@ -2,6 +2,12 @@
 Feature selection module for high-dimensional PISA tabular data.
 Filters missingness, low-variance, ranks by Mutual Information and Tree Importance,
 and preserves core socio-economic and psychological PISA domain indices.
+
+Leakage-Prevention Note:
+Because 'hybrid_importance' computes Mutual Information and ExtraTrees importances
+against target labels y, FeatureSelector MUST be fitted strictly inside each training
+split during cross-validation (never once on the pooled CV dataset). An optional
+label-independent 'domain_anchors' mode is also provided for predefined-feature ablations.
 """
 
 import logging
@@ -24,7 +30,7 @@ DOMAIN_ANCHORS = [
     "ST004D01T",  # Student gender
     "ANXMAT",     # Mathematics anxiety
     "BELONG",     # Sense of belonging to school
-    "DISCLIM",   # Disciplinary climate in mathematics
+    "DISCLIM",    # Disciplinary climate in mathematics
     "TEACHSUP",   # Teacher support in mathematics
     "MATHMOT",    # Mathematics motivation
     "MATHEFF",    # Mathematics self-efficacy
@@ -41,11 +47,13 @@ class FeatureSelector:
         target_k: int = 100,
         max_missing_ratio: float = 0.50,
         variance_threshold: float = 0.005,
+        method: str = "hybrid_importance",
         random_state: int = 42,
     ):
         self.target_k = target_k
         self.max_missing_ratio = max_missing_ratio
         self.variance_threshold = variance_threshold
+        self.method = method.lower()
         self.random_state = random_state
         self.selected_features_: List[str] = []
         self.feature_scores_: pd.DataFrame = pd.DataFrame()
@@ -53,19 +61,20 @@ class FeatureSelector:
     def fit(
         self,
         X: pd.DataFrame,
-        y: pd.Series,
+        y: Optional[pd.Series] = None,
         metadata_explorer: Optional[Any] = None,
     ) -> "FeatureSelector":
         """
-        Fit feature selection on training data.
-        Categorizes features using metadata schema into nominal and numerical/discrete
-        subsets for mutual information and tree-based importance calculation.
+        Fit feature selection strictly on the provided training split (X, y).
+        Supports:
+        - 'hybrid_importance' (default): supervised MI + ExtraTrees + Domain Anchors.
+        - 'domain_anchors': strictly label-independent predefined PISA anchor subset.
         """
         if metadata_explorer is None:
             from src.data.metadata_explorer import PISAMetadataExplorer
             metadata_explorer = PISAMetadataExplorer()
 
-        logger.info(f"Initial candidate features: {X.shape[1]}")
+        logger.info(f"Initial candidate features: {X.shape[1]} (method='{self.method}')")
 
         missing_ratios = X.isnull().mean()
         valid_missing = missing_ratios[missing_ratios <= self.max_missing_ratio].index.tolist()
@@ -74,6 +83,25 @@ class FeatureSelector:
 
         reg = categorize_pisa_features(X_curr, metadata_explorer)
         self.categorization_ = reg
+
+        if self.method == "domain_anchors":
+            anchors = [a for a in DOMAIN_ANCHORS if a in X_curr.columns]
+            if not anchors:
+                raise ValueError("No predefined DOMAIN_ANCHORS passed the missingness filter.")
+            self.selected_features_ = anchors[: self.target_k]
+            self.feature_scores_ = pd.DataFrame({
+                "feature": self.selected_features_,
+                "mutual_info": np.nan,
+                "tree_importance": np.nan,
+                "hybrid_score": 1.0,
+            })
+            logger.info(f"Selected {len(self.selected_features_)} label-independent domain anchor features.")
+            return self
+
+        if self.method != "hybrid_importance":
+            raise ValueError(f"Unsupported FeatureSelector method '{self.method}'.")
+        if y is None:
+            raise ValueError("FeatureSelector(method='hybrid_importance') requires target Series y.")
 
         cat_cols = reg.nominal_cols
         num_cols = reg.numerical_cols
@@ -125,7 +153,6 @@ class FeatureSelector:
 
         self.feature_scores_ = scores_df
 
-        # Select top K features while preserving domain anchors
         top_candidates = scores_df["feature"].tolist()
         candidate_pool = set()
 
@@ -154,7 +181,16 @@ class FeatureSelector:
             logger.warning(f"{len(missing_in_X)} selected features not found in X, filling with NaN: {missing_in_X[:5]}")
         return X.reindex(columns=self.selected_features_)
 
-    def save_scores(self, output_path: str = "outputs/tables/feature_selection_summary.csv") -> Path:
+    def fit_transform(
+        self,
+        X: pd.DataFrame,
+        y: Optional[pd.Series] = None,
+        metadata_explorer: Optional[Any] = None,
+    ) -> pd.DataFrame:
+        """Fit selector on (X, y) and return selected feature subset."""
+        return self.fit(X, y, metadata_explorer=metadata_explorer).transform(X)
+
+    def save_scores(self, output_path: str = "outputs/tables/feature_selection_scores.csv") -> Path:
         """Save feature importance scores to CSV."""
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
