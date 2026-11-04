@@ -1,13 +1,19 @@
 """
-Dataset balancing orchestrator using TabRep diffusion flow generation.
+Dataset balancing orchestrator using Official TabRep-Flow generation.
 Includes benchmark oversamplers (RandomOverSampler) and automated statistical quality verification.
+
+Task-Specific Formulation Note:
+While general tabular benchmarks synthesize the joint table (X, y), this thesis investigates
+minority-class augmentation under severe educational proficiency imbalance (~2:1 in Argentina
+PISA 2022). DatasetBalancer therefore fits TabRep-Flow exclusively on the real training minority
+cohort (Class 1: PV1MATH >= 420.07) to synthesize the exact deficit (N_0 - N_1) required for
+1:1 class parity without altering real student observations.
 """
 
 import logging
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, List
 import pandas as pd
-import numpy as np
 
 from .tabrep_adapter import TabRepDiffusionModel
 from .diagnostics import compute_distribution_metrics, plot_distribution_audit, assert_synthetic_validity
@@ -20,13 +26,19 @@ class DatasetBalancer:
     def __init__(
         self,
         strategy: str = "tabrep",
-        epochs: int = 50,
-        batch_size: int = 128,
+        epochs: int = 600,
+        batch_size: int = 512,
         lr: float = 0.001,
-        weight_decay: float = 1e-5,
+        weight_decay: float = 5e-4,
         timesteps: int = 50,
-        hidden_dims: Optional[list] = None,
-        dropout: float = 0.1,
+        hidden_dims: Optional[List[int]] = None,
+        dim_t: int = 1024,
+        dropout: float = 0.0,
+        activation: str = "relu",
+        architecture: str = "tabrep_mlp",
+        snap_discrete_levels: bool = True,
+        lr_scheduler_factor: float = 0.9,
+        lr_scheduler_patience: int = 30,
         solver: str = "heun",
         random_state: int = 42,
     ):
@@ -36,8 +48,14 @@ class DatasetBalancer:
         self.lr = lr
         self.weight_decay = weight_decay
         self.timesteps = timesteps
-        self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 512, 256]
+        self.hidden_dims = hidden_dims if hidden_dims is not None else [1024, 2048, 2048, 1024]
+        self.dim_t = dim_t
         self.dropout = dropout
+        self.activation = activation
+        self.architecture = architecture
+        self.snap_discrete_levels = snap_discrete_levels
+        self.lr_scheduler_factor = lr_scheduler_factor
+        self.lr_scheduler_patience = lr_scheduler_patience
         self.solver = solver
         self.random_state = random_state
         self.diffusion_model_: Optional[TabRepDiffusionModel] = None
@@ -53,10 +71,12 @@ class DatasetBalancer:
         discrete_cols: Optional[list] = None,
         categorization: Optional[Any] = None,
         save_diagnostics: bool = True,
+        diagnostics_table_path: str = "outputs/tables/tabrep_distribution_metrics.csv",
+        diagnostics_fig_path: str = "outputs/figures/tabrep_distribution_audit.png",
     ) -> pd.DataFrame:
         """
         Balances the training dataset to a 1:1 ratio.
-        Generates synthetic minority instances (Class 1) using TabRep Flow generation.
+        Generates synthetic minority instances (Class 1) using Official TabRep-Flow generation.
         """
         if output_path is not None:
             out_file = Path(output_path)
@@ -81,13 +101,17 @@ class DatasetBalancer:
             return train_df.copy()
 
         if self.strategy == "tabrep":
-            logger.info(f"Training TabRep Flow model on minority class (Class 1, N={n_1}) to synthesize {deficit} samples...")
+            logger.info(f"Training TabRep-Flow model on minority class (Class 1, N={n_1}) to synthesize {deficit} samples...")
             minority_features = train_df[train_df[target_col] == 1].drop(columns=[target_col]).copy()
 
             self.diffusion_model_ = TabRepDiffusionModel(
                 num_timesteps=self.timesteps,
                 hidden_dims=self.hidden_dims,
+                dim_t=self.dim_t,
                 dropout=self.dropout,
+                activation=self.activation,
+                architecture=self.architecture,
+                snap_discrete_levels=self.snap_discrete_levels,
                 random_state=self.random_state,
             )
             self.diffusion_model_.fit(
@@ -100,19 +124,21 @@ class DatasetBalancer:
                 batch_size=self.batch_size,
                 lr=self.lr,
                 weight_decay=self.weight_decay,
+                lr_scheduler_factor=self.lr_scheduler_factor,
+                lr_scheduler_patience=self.lr_scheduler_patience,
             )
 
             synthetic_samples = self.diffusion_model_.sample(
                 num_samples=deficit,
-                batch_size=256,
+                batch_size=max(self.batch_size, 256),
                 solver=self.solver,
+                seed=self.random_state,
             )
 
-            # Automated distribution quality audit
             metrics_df, summary = compute_distribution_metrics(minority_features, synthetic_samples)
             if save_diagnostics:
-                table_out = Path("outputs/tables/tabrep_distribution_metrics.csv")
-                fig_out = Path("outputs/figures/tabrep_distribution_audit.png")
+                table_out = Path(diagnostics_table_path)
+                fig_out = Path(diagnostics_fig_path)
                 table_out.parent.mkdir(parents=True, exist_ok=True)
                 fig_out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -127,7 +153,6 @@ class DatasetBalancer:
                 f"Exact Memorization = {summary['exact_copy_rate_pct']:.1f}%"
             )
 
-            # Enforce statistical quality gate
             assert_synthetic_validity(minority_features, synthetic_samples)
 
             synthetic_samples[target_col] = 1
