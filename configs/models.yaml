@@ -1,11 +1,7 @@
 # Model Configurations: Official TabRep-Flow, Downstream Classifiers, Nested CV & Selection
 
 diffusion:
-  strategy: "minority_generation" # Synthesize minority class (Class 1) to balance training data 1:1
-  model_type: "tabrep"            # Official TabRep-Flow (Si et al., arXiv:2504.04798)
   snap_discrete_levels: true      # PISA adaptation: snap ordinal/binary scales back to observed levels
-  cat_converter:
-    dim: 2                        # 2D unit-circle Phase-Shift Keying (cos(2*pi*i/K), sin(2*pi*i/K))
   network:
     architecture: "tabrep_mlp"    # Official TabRep-Flow MLP: PositionalEmbedding + 4-block Linear+ReLU
     dim_t: 1024
@@ -79,6 +75,5 @@ tuning:
 
 validation:
   cv_folds: 5
-  stratified: true
   random_state: 42
   evaluate_tabpfn_cv: false       # Set true (or pass --mode manual --model tabpfn) on GPU servers

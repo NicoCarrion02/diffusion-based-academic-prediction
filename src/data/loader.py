@@ -24,6 +24,7 @@ def prepare_train_test_data(
     threshold: float = 420.07,
     test_size: float = 0.20,
     random_state: int = 42,
+    stratify: bool = True,
     force: bool = False,
     metadata_explorer: Optional[PISAMetadataExplorer] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -83,12 +84,15 @@ def prepare_train_test_data(
     logger.info(f"Removing {len(cols_to_drop)} non-analytical and leakage columns according to metadata...")
     df.drop(columns=cols_to_drop, inplace=True)
 
-    logger.info(f"Performing stratified split ({int((1-test_size)*100)}% train / {int(test_size*100)}% test, seed={random_state})...")
+    logger.info(
+        f"Performing {'stratified ' if stratify else ''}split "
+        f"({int((1-test_size)*100)}% train / {int(test_size*100)}% test, seed={random_state})..."
+    )
     train_df, test_df = train_test_split(
         df,
         test_size=test_size,
         random_state=random_state,
-        stratify=df["target"],
+        stratify=df["target"] if stratify else None,
     )
 
     train_path.parent.mkdir(parents=True, exist_ok=True)

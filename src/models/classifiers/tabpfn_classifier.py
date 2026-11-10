@@ -70,8 +70,7 @@ def build_tabpfn_classifier(
     **kwargs,
 ):
     """
-    Safely construct a TabPFNClassifier validated against the installed package signature.
-    Unsupported legacy config keys (e.g., 'model_version', 'thinking_mode') are ignored cleanly.
+    Construct a TabPFNClassifier validated against the installed package signature.
     """
     from tabpfn import TabPFNClassifier
 

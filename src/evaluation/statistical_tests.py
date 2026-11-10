@@ -1,23 +1,22 @@
 """
 Statistical inference for classifier and generative-balancing comparisons.
 
-Methodological Design (Preventing Overstated Significance):
+Methodological Design:
 1. Cross-Validation Inference (Nadeau & Bengio, 2003; Bengio & Grandvalet, 2004):
-   K-fold cross-validation scores on a single dataset are NOT independent observations
-   because training folds share (K - 2) / (K - 1) of student records (75% overlap at K=5).
+   K-fold cross-validation scores on a single dataset are correlated because training folds
+   share (K - 2) / (K - 1) of student records (75% overlap at K=5).
    Naive paired Student's t-tests underestimate the standard error of the mean difference
-   and inflate Type I error rates, while Wilcoxon signed-rank tests both assume independent
+   and inflate Type I error rates, while Wilcoxon signed-rank tests assume independent
    paired units and have a discrete two-sided floor p_min = 2 / 2^5 = 0.0625 > 0.05 at K=5.
    Accordingly, CV inference uses the Nadeau-Bengio variance-corrected resampled t-test:
        SE_NB = sqrt((1 / J + n_val / n_train) * s_d^2),   df = J - 1.
-   Uncorrected t-test and Wilcoxon statistics are retained strictly as descriptive
-   reference columns and must not be interpreted as independent-sample p-values.
 
 2. Independent Held-Out Test Inference (Dietterich, 1998):
-   On the strictly vaulted test cohort (N_test = 2,423 non-overlapping students),
-   student-level predictions are conditionally independent given the fitted models.
-   We report Exact McNemar's binomial test on discordant predictions alongside
-   paired stratified bootstrap 95% confidence intervals (B = 2,000 resamples).
+   On the vaulted test cohort (N_test = 2,423 non-overlapping students), student-level
+   predictions are conditionally independent given the fitted models.
+   We report Exact McNemar's binomial test on discordant binary correctness vectors
+   (evaluating Overall Accuracy on the full test set and Minority Recall on the Class 1 subset)
+   alongside paired stratified bootstrap 95% confidence intervals (B = 2,000 resamples).
 """
 
 import logging
@@ -26,8 +25,8 @@ from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 import pandas as pd
 from scipy import stats
-from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (
+    accuracy_score,
     roc_auc_score,
     average_precision_score,
     f1_score,
@@ -77,7 +76,7 @@ def nadeau_bengio_ttest(
         ci_low = float(mean_diff - t_crit * se_nb)
         ci_high = float(mean_diff + t_crit * se_nb)
 
-    # Descriptive uncorrected reference statistics (flagged explicitly as non-independent)
+    # Descriptive uncorrected reference statistics across overlapping folds
     try:
         if s2_d <= 1e-15:
             t_naive = 0.0 if abs(mean_diff) <= 1e-15 else float(np.sign(mean_diff) * np.inf)
@@ -112,7 +111,7 @@ def nadeau_bengio_ttest(
         "p_value_nadeau_bengio": p_nb,
         "significant_nadeau_bengio_05": bool(p_nb < alpha) if not np.isnan(p_nb) else False,
         "folds_improved": int(np.sum(diffs > 0)),
-        # Uncorrected descriptive columns retained for backwards compatibility only
+        # Uncorrected descriptive reference statistics
         "t_statistic": t_naive,
         "p_value_ttest": p_naive,
         "wilcoxon_statistic": w_stat,
@@ -129,7 +128,7 @@ def compute_paired_cv_inference_table(
     output_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Build a rigorous paired CV statistical table from fold-level metric dictionaries
+    Build a paired CV statistical table from fold-level metric dictionaries
     using the Nadeau-Bengio variance-corrected resampled t-test.
     """
     summary_rows = []
@@ -211,10 +210,12 @@ def compute_holdout_statistical_tests(
     output_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Valid independent-sample statistical inference on the untouched held-out test set:
+    Independent-sample statistical inference on the held-out test set:
     1. Paired Stratified Bootstrap 95% CIs (preserving exact Class 0 / Class 1 sample sizes)
-       across F1 (Class 1), Recall (Class 1), Balanced Accuracy, PR-AUC, and ROC-AUC.
-    2. Exact McNemar binomial test on discordant student predictions (overall & Class 1 subset).
+       across F1 (Class 1), Recall (Class 1), Balanced Accuracy, Overall Accuracy, PR-AUC, and ROC-AUC.
+    2. Exact McNemar binomial test paired strictly with the binary correctness metric it evaluates:
+       - Class 1 subset (N_1 = 802) on 'Recall (High Performing)' (minority sensitivity).
+       - Full test set (N = 2,423) on 'Overall Accuracy' (overall classification correctness).
     """
     y_arr = np.asarray(y_true, dtype=int)
     pu_arr = np.asarray(probs_unbal, dtype=np.float64)
@@ -231,6 +232,7 @@ def compute_holdout_statistical_tests(
         "F1 (High Performing)": lambda y, pr, pd_: f1_score(y, pd_, pos_label=1, zero_division=0),
         "Recall (High Performing)": lambda y, pr, pd_: recall_score(y, pd_, pos_label=1, zero_division=0),
         "Balanced Accuracy": lambda y, pr, pd_: balanced_accuracy_score(y, pd_),
+        "Overall Accuracy": lambda y, pr, pd_: accuracy_score(y, pd_),
         "PR-AUC": lambda y, pr, pd_: average_precision_score(y, pr),
         "ROC-AUC": lambda y, pr, pd_: roc_auc_score(y, pr),
     }
@@ -249,7 +251,7 @@ def compute_holdout_statistical_tests(
         for m, fn in metric_fns.items():
             boot_diffs[m][b_idx] = fn(yb, pb_b, hb_b) - fn(yb, pu_b, hu_b)
 
-    # Exact McNemar overall and on minority Class 1 (direct test of Recall difference)
+    # Exact McNemar overall (tests Overall Accuracy) and on minority Class 1 (tests Recall)
     corr_u_all = (hu_arr == y_arr)
     corr_b_all = (hb_arr == y_arr)
     mc_b_all, mc_c_all, mc_p_all = _exact_mcnemar_pvalue(corr_b_all, corr_u_all)
@@ -268,13 +270,16 @@ def compute_holdout_statistical_tests(
 
         if m == "Recall (High Performing)":
             mc_b, mc_c, mc_p = mc_b_c1, mc_c_c1, mc_p_c1
-            mc_scope = f"Class 1 subset (N={n1})"
-        elif m in ("F1 (High Performing)", "Balanced Accuracy"):
+            mc_scope = f"Class 1 subset (N={n1}) — Minority Recall"
+        elif m == "Overall Accuracy":
             mc_b, mc_c, mc_p = mc_b_all, mc_c_all, mc_p_all
-            mc_scope = f"Full test set (N={n0 + n1})"
+            mc_scope = f"Full test set (N={n0 + n1}) — Overall Accuracy"
+        elif m in ("F1 (High Performing)", "Balanced Accuracy"):
+            mc_b, mc_c, mc_p = np.nan, np.nan, np.nan
+            mc_scope = "Composite metric (Bootstrap CI)"
         else:
             mc_b, mc_c, mc_p = np.nan, np.nan, np.nan
-            mc_scope = "Threshold-free curve metric (bootstrap CI)"
+            mc_scope = "Threshold-free curve metric (Bootstrap CI)"
 
         rows.append({
             "model": model_name,
@@ -311,6 +316,7 @@ def balance_fold_data(
     num_cols: Optional[List[str]] = None,
     discrete_cols: Optional[List[str]] = None,
     diffusion_config: Optional[Dict[str, Any]] = None,
+    device: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Balances a single training fold to a 1:1 ratio strictly using X_tr[y_tr == 1].
@@ -346,6 +352,7 @@ def balance_fold_data(
             lr_scheduler_factor=tr_cfg.get("lr_scheduler_factor", 0.9),
             lr_scheduler_patience=tr_cfg.get("lr_scheduler_patience", 30),
             solver=tr_cfg.get("solver", "heun"),
+            device=device,
             random_state=random_state,
         )
         fold_train = X_tr.copy()
@@ -381,172 +388,3 @@ def balance_fold_data(
 
     else:
         raise ValueError(f"Unsupported fold balancing strategy: {strategy}")
-
-
-def compare_models_cv(
-    X: pd.DataFrame,
-    y: pd.Series,
-    n_splits: int = 5,
-    random_state: int = 42,
-    model_type: str = "random_forest",
-    clf_params: Optional[Dict[str, Any]] = None,
-    balancer_strategy: str = "tabrep",
-    categorization: Optional[Any] = None,
-    cat_cols: Optional[List[str]] = None,
-    num_cols: Optional[List[str]] = None,
-    discrete_cols: Optional[List[str]] = None,
-    diffusion_config: Optional[Dict[str, Any]] = None,
-    apply_feature_selection: Optional[bool] = None,
-    target_k: int = 100,
-    metadata_explorer: Optional[Any] = None,
-    output_path: Optional[str] = "outputs/tables/statistical_significance.csv",
-) -> pd.DataFrame:
-    """
-    Leakage-free K-fold cross-validation comparing Unbalanced vs. Balanced classifiers
-    with Nadeau-Bengio variance-corrected statistical inference:
-    - Fits FeatureSelector strictly inside each fold whenever apply_feature_selection=True
-      (or automatically when X has > target_k candidate features).
-    - Fits NativeImputer strictly on fold training data when missing values exist.
-    - Fits FeatureEncoderScaler strictly on REAL fold training data (X_tr, y_tr),
-      preventing synthetic y=1 prior shift and rare-category target leakage.
-    """
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-
-    metrics_names = ["ROC-AUC", "F1 (High Performing)", "Recall (High Performing)", "Balanced Accuracy"]
-    unbal_scores: Dict[str, List[float]] = {m: [] for m in metrics_names}
-    bal_scores: Dict[str, List[float]] = {m: [] for m in metrics_names}
-
-    model_key = model_type.lower()
-    is_tabpfn = "tabpfn" in model_key
-    is_xgb = "xgb" in model_key or "boost" in model_key
-
-    if is_tabpfn:
-        model_display_name = "TabPFNv3"
-    elif is_xgb:
-        model_display_name = "XGBoost"
-    else:
-        model_display_name = "Random Forest"
-
-    if is_tabpfn:
-        from src.models.classifiers.tabpfn_classifier import is_tabpfn_available, build_tabpfn_classifier
-        if not is_tabpfn_available(require_token=True):
-            logger.warning(
-                "Skipping TabPFNv3 cross-validation: tabpfn not installed or TABPFN_TOKEN/HF_TOKEN not configured."
-            )
-            return pd.DataFrame()
-    elif is_xgb:
-        from src.models.classifiers.baseline_comparisons import build_xgboost
-    else:
-        from src.models.classifiers.random_forest import build_random_forest
-
-    run_selector = apply_feature_selection if apply_feature_selection is not None else (X.shape[1] > target_k)
-
-    logger.info(
-        f"Running leakage-free {n_splits}-fold paired CV ({model_display_name}: "
-        f"Unbalanced vs. Balanced [{balancer_strategy}], in_fold_selection={run_selector})..."
-    )
-
-    last_n_tr, last_n_val = 0, 0
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-        X_tr, y_tr = X.iloc[train_idx].copy(), y.iloc[train_idx].copy()
-        X_val, y_val = X.iloc[val_idx].copy(), y.iloc[val_idx].copy()
-        last_n_tr, last_n_val = len(X_tr), len(X_val)
-        fold_seed = random_state + fold
-
-        fold_cat = categorization
-        if run_selector:
-            from src.features.selector import FeatureSelector
-            from src.features.cleaner import categorize_pisa_features
-            sel = FeatureSelector(target_k=target_k, random_state=fold_seed)
-            sel.fit(X_tr, y_tr, metadata_explorer=metadata_explorer)
-            X_tr = sel.transform(X_tr)
-            X_val = sel.transform(X_val)
-            if metadata_explorer is not None:
-                fold_cat = categorize_pisa_features(X_tr, metadata_explorer)
-
-        if X_tr.isnull().any().any() or X_val.isnull().any().any():
-            from src.features.preprocessor import NativeImputer
-            imp = NativeImputer(
-                nominal_cols=cat_cols if not run_selector else None,
-                numerical_cols=num_cols if not run_selector else None,
-                categorization=fold_cat,
-            )
-            X_tr = imp.fit_transform(X_tr)
-            X_val = imp.transform(X_val)
-
-        X_tr_bal, y_tr_bal = balance_fold_data(
-            X_tr,
-            y_tr,
-            strategy=balancer_strategy,
-            random_state=fold_seed,
-            categorization=fold_cat,
-            cat_cols=cat_cols if not run_selector else None,
-            num_cols=num_cols if not run_selector else None,
-            discrete_cols=discrete_cols if not run_selector else None,
-            diffusion_config=diffusion_config,
-        )
-
-        has_categorical = (
-            (fold_cat is not None and len(fold_cat.nominal_cols) > 0)
-            or (cat_cols is not None and len(cat_cols) > 0)
-            or any(not np.issubdtype(X_tr.dtypes[c], np.number) for c in X_tr.columns)
-        )
-
-        # Fit FeatureEncoderScaler strictly on REAL fold training data (X_tr, y_tr)
-        if has_categorical or fold_cat is not None:
-            from src.features.preprocessor import FeatureEncoderScaler
-            enc_real = FeatureEncoderScaler(
-                categorization=fold_cat,
-                nominal_cols=cat_cols if not run_selector else None,
-                numerical_cols=num_cols if not run_selector else None,
-            )
-            X_tr_unbal_in = enc_real.fit_transform(X_tr, y_tr)
-            X_tr_bal_in = enc_real.transform(X_tr_bal)
-            X_val_in = enc_real.transform(X_val)
-        else:
-            X_tr_unbal_in = X_tr
-            X_tr_bal_in = X_tr_bal
-            X_val_in = X_val
-
-        params = dict(clf_params or {})
-        params["random_state"] = fold_seed
-
-        if is_tabpfn:
-            clf_unbal = build_tabpfn_classifier(**params)
-            clf_unbal.fit(X_tr_unbal_in.values.astype(np.float32), y_tr.values.astype(int))
-            probs_unbal = clf_unbal.predict_proba(X_val_in.values.astype(np.float32))[:, 1]
-            preds_unbal = (probs_unbal >= 0.5).astype(int)
-
-            clf_bal = build_tabpfn_classifier(**params)
-            clf_bal.fit(X_tr_bal_in.values.astype(np.float32), y_tr_bal.values.astype(int))
-            probs_bal = clf_bal.predict_proba(X_val_in.values.astype(np.float32))[:, 1]
-            preds_bal = (probs_bal >= 0.5).astype(int)
-        else:
-            clf_unbal = build_xgboost(**params) if is_xgb else build_random_forest(**params)
-            clf_unbal.fit(X_tr_unbal_in, y_tr)
-            probs_unbal = clf_unbal.predict_proba(X_val_in)[:, 1]
-            preds_unbal = clf_unbal.predict(X_val_in)
-
-            clf_bal = build_xgboost(**params) if is_xgb else build_random_forest(**params)
-            clf_bal.fit(X_tr_bal_in, y_tr_bal)
-            probs_bal = clf_bal.predict_proba(X_val_in)[:, 1]
-            preds_bal = clf_bal.predict(X_val_in)
-
-        unbal_scores["ROC-AUC"].append(float(roc_auc_score(y_val, probs_unbal)))
-        unbal_scores["F1 (High Performing)"].append(float(f1_score(y_val, preds_unbal, pos_label=1, zero_division=0)))
-        unbal_scores["Recall (High Performing)"].append(float(recall_score(y_val, preds_unbal, pos_label=1, zero_division=0)))
-        unbal_scores["Balanced Accuracy"].append(float(balanced_accuracy_score(y_val, preds_unbal)))
-
-        bal_scores["ROC-AUC"].append(float(roc_auc_score(y_val, probs_bal)))
-        bal_scores["F1 (High Performing)"].append(float(f1_score(y_val, preds_bal, pos_label=1, zero_division=0)))
-        bal_scores["Recall (High Performing)"].append(float(recall_score(y_val, preds_bal, pos_label=1, zero_division=0)))
-        bal_scores["Balanced Accuracy"].append(float(balanced_accuracy_score(y_val, preds_bal)))
-
-    return compute_paired_cv_inference_table(
-        model_display_name=model_display_name,
-        unbal_scores=unbal_scores,
-        bal_scores=bal_scores,
-        n_train=last_n_tr,
-        n_val=last_n_val,
-        output_path=output_path,
-    )

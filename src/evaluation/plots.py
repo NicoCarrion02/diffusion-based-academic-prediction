@@ -20,6 +20,15 @@ plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["font.size"] = 11
 
+MODEL_CURVE_COLORS: List[str] = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+]
+
 
 def plot_roc_curves(
     models_dict: Dict[str, Tuple[np.ndarray, np.ndarray]],
@@ -30,8 +39,8 @@ def plot_roc_curves(
     models_dict: {model_name: (y_true, y_prob)}
     """
     plt.figure(figsize=(8, 6), dpi=300)
-    
-    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+
+    colors = MODEL_CURVE_COLORS
     for idx, (name, (y_true, y_prob)) in enumerate(models_dict.items()):
         fpr, tpr, _ = roc_curve(y_true, y_prob)
         roc_auc = auc(fpr, tpr)
@@ -59,11 +68,12 @@ def plot_precision_recall_curves(
     models_dict: Dict[str, Tuple[np.ndarray, np.ndarray]],
     output_path: str = "outputs/figures/precision_recall_curves.png",
 ) -> Path:
-    """Plot Precision-Recall curves with baseline prevalence."""
+    """Plot Precision-Recall curves with dynamically calculated class-1 prevalence baseline."""
     plt.figure(figsize=(8, 6), dpi=300)
-    
-    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
-    baseline = 0.331  # Argentina PISA class 1 prevalence
+
+    colors = MODEL_CURVE_COLORS
+    first_y_true = next(iter(models_dict.values()))[0] if models_dict else np.array([0, 1])
+    baseline = float(np.mean(first_y_true))
     for idx, (name, (y_true, y_prob)) in enumerate(models_dict.items()):
         precision, recall, _ = precision_recall_curve(y_true, y_prob)
         ap = average_precision_score(y_true, y_prob)

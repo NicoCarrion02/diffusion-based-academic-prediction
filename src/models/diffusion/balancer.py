@@ -40,6 +40,7 @@ class DatasetBalancer:
         lr_scheduler_factor: float = 0.9,
         lr_scheduler_patience: int = 30,
         solver: str = "heun",
+        device: Optional[str] = None,
         random_state: int = 42,
     ):
         self.strategy = strategy.lower()
@@ -57,6 +58,7 @@ class DatasetBalancer:
         self.lr_scheduler_factor = lr_scheduler_factor
         self.lr_scheduler_patience = lr_scheduler_patience
         self.solver = solver
+        self.device = device
         self.random_state = random_state
         self.diffusion_model_: Optional[TabRepDiffusionModel] = None
 
@@ -112,6 +114,7 @@ class DatasetBalancer:
                 activation=self.activation,
                 architecture=self.architecture,
                 snap_discrete_levels=self.snap_discrete_levels,
+                device=self.device,
                 random_state=self.random_state,
             )
             self.diffusion_model_.fit(
@@ -146,7 +149,8 @@ class DatasetBalancer:
                 plot_distribution_audit(minority_features, synthetic_samples, metrics_df, output_path=str(fig_out))
                 logger.info(f"Saved distribution audit table to {table_out} and figure to {fig_out}")
             logger.info(
-                f"Synthetic Audit Summary: Mean KS = {summary['mean_ks_stat']:.4f}, "
+                f"Synthetic Audit Summary: Mean Numerical KS = {summary['mean_ks_numerical']:.4f}, "
+                f"Mean Nominal TVD = {summary['mean_tvd_nominal']:.4f}, "
                 f"Mean Wasserstein = {summary['mean_wasserstein']:.4f}, "
                 f"Mean OOB = {summary['mean_oob_pct']:.2f}%, "
                 f"Corr MAE = {summary['corr_matrix_mae']:.4f}, "

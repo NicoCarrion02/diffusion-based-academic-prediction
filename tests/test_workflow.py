@@ -22,9 +22,14 @@ from run import build_arg_parser
 from src.data.metadata_explorer import PISAMetadataExplorer
 from src.evaluation.explainability import compute_shap_explanations
 from src.evaluation.metrics import evaluate_predictions
+from src.evaluation.plots import (
+    MODEL_CURVE_COLORS,
+    plot_precision_recall_curves,
+    plot_roc_curves,
+)
 from src.evaluation.statistical_tests import (
-    compare_models_cv,
     compute_holdout_statistical_tests,
+    compute_paired_cv_inference_table,
     nadeau_bengio_ttest,
 )
 from src.evaluation.tuning import (
@@ -34,14 +39,12 @@ from src.evaluation.tuning import (
 )
 from src.features.cleaner import categorize_pisa_features, clean_pisa_survey_codes
 from src.features.encoders import (
-    CatConverterEncoder,
     FrequencyEncoder,
     build_categorical_encoder,
 )
 from src.features.preprocessor import (
     FeatureEncoderScaler,
     NativeImputer,
-    TabularPreprocessor,
 )
 from src.features.selector import FeatureSelector
 from src.models.classifiers.baseline_comparisons import train_xgboost
@@ -284,40 +287,49 @@ def test_preprocessor(synthetic_pisa_data, metadata_explorer):
     y = synthetic_pisa_data["target"]
     reg = categorize_pisa_features(X, metadata_explorer)
 
-    prep_dto = TabularPreprocessor(
+    imp_dto = NativeImputer(categorization=reg, numerical_strategy="median", nominal_missing_token="MISSING")
+    X_imp_dto = imp_dto.fit_transform(X)
+    enc_dto = FeatureEncoderScaler(
         categorical_strategy="target_encoder",
         categorization=reg,
         scaler_type="robust",
-        imputation_strategy="median",
     )
-    X_proc_dto = prep_dto.fit_transform(X, y)
+    X_proc_dto = enc_dto.fit_transform(X_imp_dto, y)
     assert X_proc_dto.isnull().sum().sum() == 0
     assert X_proc_dto.shape[0] == len(X)
-    assert list(X_proc_dto.columns) == list(prep_dto.transform(X).columns)
+    assert list(X_proc_dto.columns) == list(enc_dto.transform(X_imp_dto).columns)
 
     cat_cols = ["PROGN", "LANGN"]
     num_cols = ["ESCS", "HOMEPOS", "HISEI", "MATHEFF", "ANXMAT", "ST004D01T", "REPEAT"]
-    prep_exp = TabularPreprocessor(
+    imp_exp = NativeImputer(
+        nominal_cols=cat_cols,
+        numerical_cols=num_cols,
+        numerical_strategy="mean",
+        nominal_missing_token="UNK_TOKEN",
+    )
+    X_imp_exp = imp_exp.fit_transform(X)
+    enc_exp = FeatureEncoderScaler(
         categorical_strategy="target_encoder",
-        categorical_cols=cat_cols,
+        nominal_cols=cat_cols,
         numerical_cols=num_cols,
         scaler_type="robust",
-        imputation_strategy="median",
     )
-    X_proc_exp = prep_exp.fit_transform(X, y)
+    X_proc_exp = enc_exp.fit_transform(X_imp_exp, y)
     assert X_proc_exp.shape[0] == len(X)
 
-    prep_missing_cols = TabularPreprocessor(
-        categorical_strategy="target_encoder",
-        categorical_cols=cat_cols,
+    imp_missing_cols = NativeImputer(
+        nominal_cols=cat_cols,
         numerical_cols=["ESCS"],
     )
     with pytest.raises(ValueError, match="Unassigned columns found"):
-        prep_missing_cols.fit(X, y)
+        imp_missing_cols.fit(X)
 
-    prep_empty = TabularPreprocessor()
-    with pytest.raises(ValueError, match="requires explicit column lists"):
-        prep_empty.fit(X, y)
+    imp_overlap = NativeImputer(
+        nominal_cols=cat_cols + ["ESCS"],
+        numerical_cols=num_cols,
+    )
+    with pytest.raises(ValueError, match="Columns assigned to both nominal and numerical"):
+        imp_overlap.fit(X)
 
 
 def test_native_imputer_and_real_cohort_target_encoding(synthetic_pisa_data, metadata_explorer):
@@ -453,26 +465,27 @@ def test_statistical_tests_nadeau_bengio_and_holdout(synthetic_pisa_data):
         random_state=42,
         output_path=None,
     )
-    assert len(ht_df) == 5
+    assert len(ht_df) == 6
     assert {"bootstrap_ci95_low", "bootstrap_ci95_high", "mcnemar_exact_pvalue"}.issubset(ht_df.columns)
+    acc_row = ht_df[ht_df["metric"] == "Overall Accuracy"].iloc[0]
+    rec_row = ht_df[ht_df["metric"] == "Recall (High Performing)"].iloc[0]
+    f1_row = ht_df[ht_df["metric"] == "F1 (High Performing)"].iloc[0]
+    assert "Overall Accuracy" in acc_row["mcnemar_scope"]
+    assert "Minority Recall" in rec_row["mcnemar_scope"]
+    assert np.isnan(f1_row["mcnemar_exact_pvalue"])
 
-    # 3. Verify intra-fold FeatureSelector inside compare_models_cv
-    X = synthetic_pisa_data[["ESCS", "HOMEPOS", "HISEI", "MATHEFF", "ANXMAT"]]
-    y = synthetic_pisa_data["target"]
-    stat_df = compare_models_cv(
-        X,
-        y,
-        n_splits=3,
-        model_type="random_forest",
-        clf_params={"n_estimators": 8, "max_depth": 3},
-        balancer_strategy="random_oversample",
-        apply_feature_selection=True,
-        target_k=3,
+    # 3. Verify paired CV statistical inference table helper
+    cv_table = compute_paired_cv_inference_table(
+        model_display_name="Random Forest",
+        unbal_scores={"F1 (High Performing)": unbal.tolist(), "ROC-AUC": [0.85, 0.86, 0.84, 0.85, 0.86]},
+        bal_scores={"F1 (High Performing)": bal.tolist(), "ROC-AUC": [0.86, 0.87, 0.85, 0.86, 0.86]},
+        n_train=7750,
+        n_val=1938,
         output_path=None,
     )
-    assert len(stat_df) == 4
-    assert "p_value_nadeau_bengio" in stat_df.columns
-    assert "p_value_ttest" in stat_df.columns
+    assert len(cv_table) == 2
+    assert "p_value_nadeau_bengio" in cv_table.columns
+    assert "p_value_ttest" in cv_table.columns
 
 
 def test_nested_cv_manual_and_auto_modes(synthetic_pisa_data, metadata_explorer, tmp_path):
@@ -573,16 +586,63 @@ def test_categorical_encoders_strict(synthetic_pisa_data):
     with pytest.raises(ValueError, match="requires an explicit list of columns"):
         FrequencyEncoder().fit(df_cat)
 
-    with pytest.raises(ValueError, match="requires an explicit list of columns"):
-        CatConverterEncoder().fit(df_cat)
-
     freq_enc = FrequencyEncoder(cols=["PROGN", "LANGN"]).fit(df_cat)
     df_freq = freq_enc.transform(df_cat)
     assert df_freq.shape == df_cat.shape
 
-    cat_conv = CatConverterEncoder(cols=["PROGN", "LANGN"]).fit(df_cat)
-    df_conv = cat_conv.transform(df_cat)
-    assert "PROGN_cos" in df_conv.columns and "PROGN_sin" in df_conv.columns
+    ord_enc = build_categorical_encoder("ordinal", cols=["PROGN", "LANGN"]).fit(df_cat)
+    df_ord = ord_enc.transform(df_cat)
+    assert df_ord.shape == df_cat.shape
 
     with pytest.raises(ValueError, match="Unknown categorical encoding strategy"):
         build_categorical_encoder("unsupported_strategy")
+
+
+def test_plotting_unique_colors_and_dynamic_baseline(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+
+    y_true = np.array([0] * 60 + [1] * 40, dtype=int)
+    rng = np.random.RandomState(42)
+    models_data = {}
+    model_names = [
+        "Random Forest (Unbalanced)",
+        "Random Forest (TabRep Balanced)",
+        "XGBoost (Unbalanced)",
+        "XGBoost (TabRep Balanced)",
+        "TabPFNv3 (Unbalanced)",
+        "TabPFNv3 (TabRep Balanced)",
+    ]
+    for idx, name in enumerate(model_names):
+        probs = np.clip(0.25 + 0.45 * y_true + rng.normal(0, 0.12 + 0.01 * idx, len(y_true)), 0.01, 0.99)
+        models_data[name] = (y_true, probs)
+
+    assert len(MODEL_CURVE_COLORS) >= 6
+    assert len(set(MODEL_CURVE_COLORS[:6])) == 6
+
+    captured_axes = []
+    orig_close = plt.close
+
+    def _capture_close(fig=None):
+        target_fig = fig if fig is not None else plt.gcf()
+        if target_fig.axes:
+            captured_axes.append(target_fig.axes[0])
+        orig_close(fig)
+
+    monkeypatch.setattr(plt, "close", _capture_close)
+
+    roc_path = tmp_path / "roc_6models.png"
+    pr_path = tmp_path / "pr_6models.png"
+    plot_roc_curves(models_data, str(roc_path))
+    plot_precision_recall_curves(models_data, str(pr_path))
+
+    assert roc_path.exists() and pr_path.exists()
+    assert len(captured_axes) == 2
+
+    roc_ax, pr_ax = captured_axes[0], captured_axes[1]
+    roc_curve_colors = [line.get_color() for line in roc_ax.get_lines()[:6]]
+    pr_curve_colors = [line.get_color() for line in pr_ax.get_lines()[:6]]
+    assert len(set(roc_curve_colors)) == 6
+    assert len(set(pr_curve_colors)) == 6
+
+    baseline_line = pr_ax.get_lines()[6]
+    assert f"({np.mean(y_true) * 100:.1f}%)" in baseline_line.get_label()

@@ -119,6 +119,7 @@ class MasterPipeline:
             threshold=cfg_s["threshold"],
             test_size=cfg_sp["test_size"],
             random_state=cfg_sp["random_state"],
+            stratify=bool(cfg_sp.get("stratify", True)),
             force=force,
             metadata_explorer=self.explorer,
         )
@@ -176,7 +177,11 @@ class MasterPipeline:
         cat_registry = categorize_pisa_features(X_train_sel, self.explorer)
         self.cat_registry_ = cat_registry
 
-        imputer = NativeImputer(categorization=cat_registry)
+        imputer = NativeImputer(
+            categorization=cat_registry,
+            numerical_strategy=prep_cfg.get("numerical_imputer", "median"),
+            nominal_missing_token=prep_cfg.get("nominal_missing_token", "MISSING"),
+        )
         X_train_proc = imputer.fit_transform(X_train_sel)
         X_test_proc = imputer.transform(X_test_sel)
 
@@ -206,6 +211,8 @@ class MasterPipeline:
 
         tables_dir = Path(self.config["outputs"]["tables_dir"])
         figures_dir = Path(self.config["outputs"]["figures_dir"])
+        use_gpu = bool(self.config["execution"].get("use_gpu", True))
+        resolved_device = "auto" if use_gpu else "cpu"
 
         balancer = DatasetBalancer(
             strategy="tabrep",
@@ -223,6 +230,7 @@ class MasterPipeline:
             lr_scheduler_factor=train_cfg.get("lr_scheduler_factor", 0.9),
             lr_scheduler_patience=train_cfg.get("lr_scheduler_patience", 30),
             solver=train_cfg.get("solver", "heun"),
+            device=resolved_device,
             random_state=self.config["execution"]["seed"],
         )
 
@@ -289,6 +297,11 @@ class MasterPipeline:
         resolved_metric = primary_metric or sel_cfg.get("primary_metric", "f1_high_performing")
         resolved_strategy = "none" if no_tune else tune_cfg.get("strategy", "tpe")
         seed = int(self.config["execution"]["seed"])
+        use_gpu = bool(self.config["execution"].get("use_gpu", True))
+
+        classifier_cfgs = {k: dict(v) for k, v in self.model_cfg["classifiers"].items()}
+        if not use_gpu and "tabpfn" in classifier_cfgs:
+            classifier_cfgs["tabpfn"]["device"] = "cpu"
 
         # ------------------------------------------------------------------
         # Stage 6A: Leakage-Free Nested CV on full `train.parquet` ONLY
@@ -308,6 +321,8 @@ class MasterPipeline:
             categorical_strategy=enc_cfg["categorical_strategy"],
             scaler_type=prep_cfg["scaler"],
             target_encoder_smoothing=enc_cfg["target_encoder_smoothing"],
+            numerical_imputer=prep_cfg.get("numerical_imputer", "median"),
+            nominal_missing_token=prep_cfg.get("nominal_missing_token", "MISSING"),
             balancer_strategy="tabrep",
             diffusion_config=self.model_cfg["diffusion"],
             metadata_explorer=self.explorer,
@@ -328,7 +343,7 @@ class MasterPipeline:
             n_trials_by_model=tune_cfg.get("n_trials", {"random_forest": 20, "xgboost": 25, "tabpfn": 30}),
             n_trials_override=n_trials_override,
             evaluate_tabpfn_cv=val_cfg.get("evaluate_tabpfn_cv", False),
-            classifier_configs=self.model_cfg["classifiers"],
+            classifier_configs=classifier_cfgs,
             tabpfn_tuning_grid=tune_cfg.get("tabpfn_grid"),
             random_state=seed,
         )
@@ -396,7 +411,7 @@ class MasterPipeline:
             cat_reg = categorize_pisa_features(X_train_unbal, self.explorer)
             self.cat_registry_ = cat_reg
 
-        # Fit FeatureEncoderScaler strictly on REAL training rows (prevents synthetic y=1 prior/rare-code shift)
+        # Fit FeatureEncoderScaler on observed training rows (X_train_unbal, y_train_unbal)
         encoder_real = FeatureEncoderScaler(
             categorical_strategy=enc_cfg["categorical_strategy"],
             scaler_type=prep_cfg["scaler"],
@@ -429,7 +444,7 @@ class MasterPipeline:
         rf_importances: Optional[pd.Series] = None
 
         for m_key in holdout_models:
-            base_cfg = dict(self.model_cfg["classifiers"].get(m_key, {}))
+            base_cfg = dict(classifier_cfgs.get(m_key, {}))
             for reg_key in active_regimes:
                 X_tr_fit = X_train_unbal_enc if reg_key == "unbalanced" else X_train_bal_enc
                 y_tr_fit = y_train_unbal if reg_key == "unbalanced" else y_train_bal

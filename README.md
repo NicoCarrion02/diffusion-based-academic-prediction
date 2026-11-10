@@ -7,7 +7,7 @@
 
 ---
 
-## 📌 Abstract & Research Problem
+## Abstract & Research Problem
 
 Academic performance prediction on large-scale international educational assessments (such as the OECD Programme for International Student Assessment, **PISA 2022**) faces two structural challenges:
 1. **High Dimensionality & Mixed Survey Modalities:** The raw PISA student questionnaire contains $1,278$ heterogeneous variables ($1,070$ analytical predictors after leakage removal), spanning continuous IRT socio-economic and attitudinal scales, discrete ordinal Likert items, binary indicators, and unordered nominal codes (`ISCO-08` parental occupations, national programme tracks).
@@ -17,7 +17,7 @@ This repository implements an **idempotent, leakage-free tabular generative and 
 
 ---
 
-## 🏗️ Architecture & Directory Structure
+## Architecture & Directory Structure
 
 ```text
 ├── configs/
@@ -46,33 +46,33 @@ This repository implements an **idempotent, leakage-free tabular generative and 
 │   │   └── loader.py             # Filter ARG, PV1MATH binarization, 208-column leakage purge, 80/20 split
 │   ├── features/
 │   │   ├── cleaner.py            # Format-declared missing-code sanitizer & schema categorizer
-│   │   ├── encoders.py           # Categorical encoders (Target, Frequency, One-Hot, CatConverter PSK)
+│   │   ├── encoders.py           # Categorical encoders (Target, CatBoost, Frequency, One-Hot, Ordinal)
 │   │   ├── selector.py           # Hybrid MI + ExtraTrees + Domain Anchors & label-free anchor modes
-│   │   └── preprocessor.py       # Leakage-free NativeImputer & real-cohort FeatureEncoderScaler
+│   │   └── preprocessor.py       # Survey-native NativeImputer & real-cohort FeatureEncoderScaler
 │   ├── models/
 │   │   ├── diffusion/
 │   │   │   ├── tabrep_adapter.py # Official TabRep-Flow (NQT + 2D CatConverter PSK + 4-layer ReLU MLP)
 │   │   │   ├── balancer.py       # Minority-class (Class 1) synthesis & 1:1 dataset balancer
-│   │   │   └── diagnostics.py    # Distribution audit (KS, 1-Wasserstein, OOB, Correlation MAE, Copy rate)
+│   │   │   └── diagnostics.py    # Disentangled numerical KS/Wasserstein & nominal TVD distribution audit
 │   │   └── classifiers/
 │   │       ├── random_forest.py  # Random Forest builder & trainer
 │   │       ├── baseline_comparisons.py # CPU-hist XGBoost builder & trainer
 │   │       └── tabpfn_classifier.py    # TabPFNv3 wrapper + single-pass raw-logit calibration helpers
 │   ├── evaluation/
 │   │   ├── metrics.py            # ROC-AUC, PR-AUC, Balanced Acc, Specificity, F1, Recall, Brier
-│   │   ├── plots.py              # Publication-ready ROC, PR, Confusion Matrix & Gini importance plots
+│   │   ├── plots.py              # Publication-ready 6-curve ROC, PR, Confusion Matrix & Gini plots
 │   │   ├── tuning.py             # Nested CV Optuna TPE tuner & manual/automatic champion selector
 │   │   ├── statistical_tests.py  # Nadeau-Bengio CV t-test, Exact McNemar & Stratified Bootstrap CIs
 │   │   └── explainability.py     # SHAP TreeExplainer beeswarm, global bar & contrastive waterfalls
 │   └── pipeline.py               # Master idempotent orchestrator
 ├── tests/
-│   └── test_workflow.py          # Cold-clone unit & integration test suite (13 tests via pytest)
+│   └── test_workflow.py          # Cold-clone unit & integration test suite (14 tests via pytest)
 └── run.py                        # Unified CLI entrypoint supporting auto & manual selection modes
 ```
 
 ---
 
-## 🔬 Methodological Design & Fidelity
+## Methodological Design & Fidelity
 
 ### 1. Official `TabRep-Flow` vs. Explicit PISA-2022 Adaptations
 - **Original TabRep Components (Preserved Verbatim from Si et al., `arXiv:2504.04798`):**
@@ -85,13 +85,13 @@ This repository implements an **idempotent, leakage-free tabular generative and 
   3. Minority-only (`Class 1`, $N_1 = 3,207$) training to synthesize $N_0 - N_1 = 3,274$ profiles ($1:1$ balance: $6,481$ vs. $6,481$).
 
 ### 2. Leakage-Free Nested Cross-Validation & Statistical Testing
-- **Intra-Split Preprocessing & Real-Cohort Target Encoding:** Every inner and outer CV split independently fits `FeatureSelector` ($k = 100$) $\to$ `NativeImputer` $\to$ `TabRep-Flow` $\to$ **real-cohort `FeatureEncoderScaler`** (`fit(X_tr_real, y_tr_real)`), preventing synthetic `y = 1` prior shift ($0.331 \to 0.500$) and rare-category label leakage.
+- **Intra-Split Preprocessing & Real-Cohort Target Encoding:** Every inner and outer CV split independently fits `FeatureSelector` ($k = 100$) $\to$ `NativeImputer` $\to$ `TabRep-Flow` $\to$ **real-cohort `FeatureEncoderScaler`** (`fit(X_tr_real, y_tr_real)`), preserving empirical class priors ($P(Y=1) = 0.331$) and preventing synthetic category-frequency distortion.
 - **Nested Model Selection (`test.parquet` Strictly Vaulted):** Hyperparameters $\hat{\theta}_k$ are tuned via Optuna Multivariate TPE on inner splits inside $\mathcal{D}_{\text{outer\_tr}}^{(k)}$, while candidate ranking (`--mode auto` or `--mode manual`) uses untouched outer validation folds $\mathcal{D}_{\text{outer\_val}}^{(k)}$.
-- **Valid Statistical Inference:** Correlated $K$-fold CV comparisons use the **Nadeau & Bengio (2003) variance-corrected resampled $t$-test** ($\text{SE}_{\text{NB}} = \sqrt{(1/J + n_{\text{val}}/n_{\text{tr}})s_d^2}$), while independent held-out test predictions ($N_{\text{test}} = 2,423$) are evaluated via **Exact McNemar binomial tests** and **paired stratified bootstrap $95\%$ CIs** ($2,000$ resamples).
+- **Valid Statistical Inference:** Correlated $K$-fold CV comparisons use the **Nadeau & Bengio (2003) variance-corrected resampled $t$-test** ($\text{SE}_{\text{NB}} = \sqrt{(1/J + n_{\text{val}}/n_{\text{tr}})s_d^2}$), while independent held-out test predictions ($N_{\text{test}} = 2,423$) are evaluated via **Exact McNemar binomial tests** (paired strictly with the binary correctness metrics they test: Minority Recall on the Class 1 subset and Overall Accuracy on the full test set) and **paired stratified bootstrap $95\%$ CIs** ($2,000$ resamples).
 
 ---
 
-## 🚀 Quickstart & Reproduction
+## Quickstart & Reproduction
 
 All pipeline stages are **idempotent**: existing intermediate artifacts are reused automatically unless `--force` (or an explicit CLI selection override) is passed.
 
@@ -119,7 +119,7 @@ pytest tests/ -v
 python run.py --step all
 ```
 
-### 🎛️ Automatic vs. Manual Model Selection Modes
+### Automatic vs. Manual Model Selection Modes
 ```bash
 # Automatic mode (default): Nested CV tuning & ranking across candidates
 python run.py --step benchmark --mode auto --metric f1_high_performing --force
@@ -133,7 +133,7 @@ python run.py --step benchmark --mode manual --model tabpfn --regime both
 python run.py --step benchmark --no-tune --force
 ```
 
-### 🔑 Optional: `TabPFNv3` Foundation Model Activation (`.env`)
+### Optional: `TabPFNv3` Foundation Model Activation (`.env`)
 The pipeline and notebook run out-of-the-box with **Random Forest** and **XGBoost**. To also evaluate **`TabPFNv3`** (`TabPFNV3p5`):
 1. Register a free academic account at https://ux.priorlabs.ai and copy your token from https://ux.priorlabs.ai/account (or authorize gated weights via `HF_TOKEN`).
 2. Copy `.env.example` to `.env` and set `TABPFN_TOKEN=...` (or `HF_TOKEN=...`).
@@ -141,19 +141,19 @@ The pipeline and notebook run out-of-the-box with **Random Forest** and **XGBoos
 
 ---
 
-## 📊 Experimental Results ($k = 100$)
+## Experimental Results ($k = 100$)
 
 ### 1. Independent Vaulted Test Set Benchmark ($N_{\text{test}} = 2,423$)
 Evaluated once on the held-out Argentina cohort ($1,621$ Class 0 [`66.90%`], $802$ Class 1 [`33.10%`]) using real-cohort target encoding and Nested CV-selected hyperparameters:
 
-| Model & Training Regime | ROC-AUC | PR-AUC | Balanced Acc | Specificity | High-Perf F1 | High-Perf Recall | Brier Score |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Random Forest (Unbalanced)** | `0.8433` | `0.7580` | `74.24%` | **89.76%** | `0.6546` | `58.73%` | `0.1465` |
-| **Random Forest (TabRep Balanced)** | `0.8342` | `0.7397` | `74.91%` | `82.60%` | `0.6642` | **67.21%** | `0.1546` |
-| **XGBoost (Unbalanced)** *(Tree CV Champion)* | `0.8678` | `0.7932` | `76.84%` | `88.34%` | `0.6917` | `65.34%` | `0.1348` |
-| **XGBoost (TabRep Balanced)** | `0.8652` | `0.7832` | `76.63%` | `86.18%` | `0.6880` | `67.08%` | `0.1383` |
-| **TabPFNv3 (Unbalanced)** | **0.8733** | **0.7936** | `77.12%` | `89.02%` | `0.6959` | `65.21%` | **0.1324** |
-| **TabPFNv3 (TabRep Balanced)** | `0.8712` | `0.7919` | **77.67%** | `89.51%` | **0.7040** | `65.84%` | `0.1330` |
+| Model & Training Regime | ROC-AUC | PR-AUC | Accuracy | Balanced Acc | Specificity | High-Perf F1 | High-Perf Recall | Brier Score |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Random Forest (Unbalanced)** | `0.8433` | `0.7580` | `79.49%` | `74.24%` | **89.76%** | `0.6546` | `58.73%` | `0.1465` |
+| **Random Forest (TabRep Balanced)** | `0.8342` | `0.7397` | `77.51%` | `74.91%` | `82.60%` | `0.6642` | **67.21%** | `0.1546` |
+| **XGBoost (Unbalanced)** *(Tree CV Champion)* | `0.8678` | `0.7932` | `80.73%` | `76.84%` | `88.34%` | `0.6917` | `65.34%` | `0.1348` |
+| **XGBoost (TabRep Balanced)** | `0.8652` | `0.7832` | `79.90%` | `76.63%` | `86.18%` | `0.6880` | `67.08%` | `0.1383` |
+| **TabPFNv3 (Unbalanced)** | **0.8733** | **0.7936** | `81.14%` | `77.12%` | `89.02%` | `0.6959` | `65.21%` | **0.1324** |
+| **TabPFNv3 (TabRep Balanced)** | `0.8712` | `0.7919` | **81.68%** | **77.67%** | `89.51%` | **0.7040** | `65.84%` | `0.1330` |
 
 ### 2. 5-Fold Nested Cross-Validation Inference (Nadeau–Bengio Corrected, `train.parquet` Only)
 Evaluated strictly on untouched outer validation folds ($n_{\text{val}} / n_{\text{tr}} = 1,937 / 7,751$, accounting for $75\%$ training-set overlap):
@@ -168,25 +168,31 @@ Evaluated strictly on untouched outer validation folds ($n_{\text{val}} / n_{\te
 | **XGBoost** | Balanced Accuracy | `76.76%` | `76.56%` | `-0.21%` | `[-1.27%, +0.86%]` | `2/5` | `-0.54` | `0.6179` | `0.4635` |
 
 ### 3. Held-Out Test Inference (Paired Stratified Bootstrap & Exact McNemar, $N_{\text{test}} = 2,423$)
+Exact McNemar's test is a paired binomial test on binary correctness vectors and is therefore paired strictly with the binary correctness metric it evaluates (**Minority Recall** on the $N_1 = 802$ Class 1 subset and **Overall Accuracy** on the full $N = 2,423$ test cohort), while composite and threshold-free metrics (`F1`, `Balanced Accuracy`, `PR-AUC`, `ROC-AUC`) are evaluated via paired stratified bootstrap confidence intervals and two-sided bootstrap $p$-values:
 
-| Model | Metric | Unbalanced | TabRep Balanced | Difference | 95% Bootstrap CI | Exact McNemar $p$ |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Random Forest** | Recall (High-Perf) | `58.73%` | `67.21%` | **`+8.48%`** | `[+6.23%, +10.85%]` | **$1.40 \times 10^{-12}$** *(Class 1)* |
-| **Random Forest** | F1 (High-Perf) | `0.6546` | `0.6642` | `+0.0096` | `[-0.0085, +0.0292]` | `0.0022` *(Full test)* |
-| **XGBoost** | Recall (High-Perf) | `65.34%` | `67.08%` | `+1.75%` | `[-0.37%, +3.74%]` | `0.1143` *(Class 1)* |
-| **TabPFNv3** | F1 (High-Perf) | `0.6959` | **`0.7040`** | `+0.0081` | `[-0.0065, +0.0226]` | `0.2546` *(Full test)* |
-| **TabPFNv3** | Balanced Accuracy | `77.12%` | **`77.67%`** | `+0.56%` | `[-0.47%, +1.62%]` | `0.2546` *(Full test)* |
+| Model | Metric | Unbalanced | TabRep Balanced | Difference | 95% Bootstrap CI | Bootstrap $p$ | Exact McNemar $p$ (Discordant $b$ vs. $c$) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Random Forest** | Recall (High-Perf) | `58.73%` | `67.21%` | **`+8.48%`** | `[+6.23%, +10.85%]` | `< 0.0001` | **$1.40 \times 10^{-12}$** ($b=83, c=15$, Class 1) |
+| **Random Forest** | F1 (High-Perf) | `0.6546` | `0.6642` | `+0.0096` | `[-0.0085, +0.0292]` | `0.3150` | — *(Composite metric)* |
+| **Random Forest** | Overall Accuracy | `79.49%` | `77.51%` | `-1.98%` | `[-3.14%, -0.82%]` | `0.0010` | **`0.0022`** ($b=94, c=142$, Full test) |
+| **XGBoost** | Recall (High-Perf) | `65.34%` | `67.08%` | `+1.75%` | `[-0.37%, +3.74%]` | `0.1100` | `0.1143` ($b=41, c=27$, Class 1) |
+| **XGBoost** | Overall Accuracy | `80.73%` | `79.86%` | `-0.87%` | `[-1.90%, +0.12%]` | `0.1070` | `0.1147` ($b=70, c=91$, Full test) |
+| **TabPFNv3** | F1 (High-Perf) | `0.6959` | `0.7040` | `+0.0081` | `[-0.0065, +0.0226]` | `0.2390` | — *(Composite metric)* |
+| **TabPFNv3** | Balanced Accuracy | `77.12%` | `77.67%` | `+0.56%` | `[-0.47%, +1.62%]` | `0.2550` | — *(Composite metric)* |
+| **TabPFNv3** | Overall Accuracy | `81.14%` | `81.68%` | `+0.54%` | `[-0.29%, +1.40%]` | `0.2250` | `0.2546` ($b=62, c=49$, Full test) |
 
-### Key Empirical Findings
-1. **Substantial Minority Recall Recovery in Bagging (`Random Forest`):** Official `TabRep-Flow` $1:1$ balancing boosts minority proficiency recall by **`+8.48 pp` on the vaulted test set** ($p_{\text{McNemar}} = 1.40 \times 10^{-12}$, rescuing $68$ net proficient students from false-negative misclassification) and **`+8.95 pp` across 5-fold Nested CV** ($p_{\text{NB}} = 0.0057$), while raising both High-Performing F1 (`0.6546 -> 0.6642`) and Balanced Accuracy (`74.24% -> 74.91%`).
-2. **Synergy with Tabular Foundation Models (`TabPFNv3`):** Supplying the `1:1` `TabRep-Flow` balanced training cohort as in-context conditioning to `TabPFNv3` yields the **strongest overall F1 (`0.7040`), Balanced Accuracy (`77.67%`), and Accuracy (`81.68%`)** in the study, simultaneously improving minority recall (`65.21% -> 65.84%`) and specificity (`89.02% -> 89.51%`).
-3. **Methodological Coherence & Variance Correction (`XGBoost`):** Eliminating feature-selection and target-encoding leakage aligns Nested CV (`0.6911` vs. `0.6872`) with the vaulted test set (`0.6917` vs. `0.6880`) to within `0.0008`, while Nadeau–Bengio correction prevents false-positive claims on `XGBoost` recall ($p_{\text{naive}} = 0.0238$ vs. $p_{\text{NB}} = 0.0770$).
-4. **Generative Fidelity & Privacy:** Official `TabRep-Flow` achieves **$0.00\%$ out-of-bounds violations**, **$0.0\%$ exact memorization**, pairwise correlation $\text{MAE} = 0.0404$, and mean 1-Wasserstein distance $= 0.3249$.
+### 4. Key Empirical Findings & Methodological Discussion
+1. **Minority Recall vs. Specificity Trade-Off in Bagging (`Random Forest`):** Official `TabRep-Flow` $1:1$ balancing increases minority proficiency recall by **`+8.48 pp` on the vaulted test set** (Class-1 Exact McNemar $p = 1.40 \times 10^{-12}$, rescuing $83 - 15 = 68$ net proficient students from false-negative misclassification) and **`+8.95 pp` across 5-fold Nested CV** ($p_{\text{NB}} = 0.0057$). Because training on a $1:1$ balanced prior ($P_{\text{train}}(Y=1) = 0.500$) while evaluating at a fixed decision threshold ($\tau = 0.50$) shifts predicted posterior probabilities upward, majority-class specificity decreases from `89.76%` to `82.60%` (`-7.16 pp`), which reduces **Overall Accuracy** on the $2:1$ imbalanced test cohort from `79.49%` to `77.51%` (Full-Test Exact McNemar $p = 0.0022$, $b=94$ vs. $c=142$). On class-balanced criteria, point estimates improve modestly (`Balanced Accuracy`: `74.24% -> 74.91%`; `High-Perf F1`: `0.6546 -> 0.6642`, $p_{\text{boot}} = 0.3150$).
+2. **In-Context Conditioning with `TabPFNv3`:** Supplying the `1:1` `TabRep-Flow` balanced training cohort to `TabPFNv3` achieves the highest point estimates in the benchmark (`F1 = 0.7040`, `Balanced Accuracy = 77.67%`, `Overall Accuracy = 81.68%`), simultaneously nudging recall (`65.21% -> 65.84%`) and specificity (`89.02% -> 89.51%`) upward. However, paired stratified bootstrap and Exact McNemar inference confirm that these gains over `TabPFNv3 (Unbalanced)` (`F1 = 0.6959`, $\Delta F_1 = +0.0081$, $95\%$ CI `[-0.0065, +0.0226]`, $p_{\text{boot}} = 0.2390$, Full-Test McNemar $p = 0.2546$) are **not statistically significant at $\alpha = 0.05$**. Pre-trained in-context tabular transformers already handle moderate ($2:1$) class imbalance effectively without synthetic oversampling.
+3. **Gradient Boosting Calibration & Variance-Corrected CV Inference (`XGBoost`):** Across both 5-fold Nested CV (`F1 = 0.6911` Unbalanced vs. `0.6872` Balanced) and the vaulted test set (`F1 = 0.6917` vs. `0.6880`), histogram-based `XGBoost` exhibits a `+1.75 pp` to `+1.81 pp` gain in minority recall accompanied by a `-0.0038` change in F1 and a `-0.99 pp` drop in PR-AUC (`0.7932 -> 0.7832`). Furthermore, Nadeau–Bengio variance correction demonstrates that the apparent 5-fold CV recall improvement ($p_{\text{naive}} = 0.0238$) does not reach significance once the $75\%$ inter-fold training overlap is accounted for ($p_{\text{NB}} = 0.0770$, consistent with held-out Class-1 McNemar $p = 0.1143$).
+4. **Disentangled Generative Fidelity & High-Cardinality 2D PSK Bottleneck:**
+   - **Numerical Manifold Fidelity ($85$ Continuous & Ordinal/Binary Features):** `TabRep-Flow` achieves a mean two-sample Kolmogorov–Smirnov statistic of **`0.1307`** (`median = 0.1198`), mean 1-Wasserstein distance of **`0.3275`**, pairwise Pearson correlation $\text{MAE} = \mathbf{0.0404}$, and **`0.0%` exact memorization** in standardized feature space (mean standardized nearest-neighbor $L_2$ distance $= 10.4759$). The **`0.00%` out-of-bounds violation rate** on continuous features is structurally guaranteed by `QuantileTransformer.inverse_transform()`, which clips latent Gaussian draws outside $[\Phi^{-1}(0), \Phi^{-1}(1)]$ onto the observed training minimum and maximum, while `snap_discrete_levels=True` projects the $44$ discrete Likert/binary variables onto valid survey codes.
+   - **Nominal Category Fidelity ($15$ Unordered Categorical Features) & Angular Crowding:** Evaluated separately via Total Variation Distance ($\text{TVD} = \frac{1}{2}\sum_{c} |P_{\text{real}}(c) - P_{\text{synth}}(c)|$), the $15$ nominal features yield a mean TVD of **`0.3103`** (`median = 0.1939`). While low-cardinality nominal items ($K \le 7$, such as `ST327Q08JA` and `ST327Q07JA`) achieve low TVD (`0.112–0.146`), high-cardinality administrative and `ISCO-08` occupational codes exhibit substantial distributional divergence: `OCOD3` ($\text{TVD} = 0.6544$), `OCOD1` ($0.5865$, $K > 400$), `OCOD2` ($0.5462$, $K > 400$), `LANGN` ($0.5332$), and `PROGN` ($0.5273$). Under `TabRep`'s 2D unit-circle Phase-Shift Keying $(\sin(2\pi k / K), \cos(2\pi k / K))$, adjacent categories are separated by $\Delta\theta = 2\pi / K$ radians; when $K > 200\text{--}400$, $\Delta\theta < 0.016\text{ rad}$ ($< 0.9^\circ$), so small ODE integration errors during 50-step Heun sampling scatter trajectories into neighboring `atan2` angular sectors. Because `OCOD1` and `OCOD2` are the `#1` and `#2` global SHAP predictors in `XGBoost`, this high-cardinality PSK noise directly explains why synthetic balancing slightly degrades `XGBoost` PR-AUC (`-0.0099`), whereas `Random Forest` (`max_features="log2"` / `"sqrt"`) averages across randomized feature subsets and captures the `+8.48 pp` minority recall gain.
 5. **SHAP Tree Interpretability:** Exact `TreeExplainer` attributions highlight maternal/paternal `ISCO-08` occupation (`OCOD1`, `OCOD2`), weekly instructional periods (`ST059Q02JA` — a direct institutional policy lever), mathematics self-efficacy (`MATHEFF`), household digital/book resources (`ST253Q01JA`, `ST255Q01JA`), and growth mindset (`ST263Q02JA`).
 
 ---
 
-## 🔒 Thesis Submission & Privacy Compliance
+## Thesis Submission & Privacy Compliance
 
 - **Repository Privacy:** Must remain **Private** in accordance with graduate committee policy.
 - **Evaluator Access:** Shared with evaluator GitHub user **`mtgca`** (*Settings → Collaborators → Add people → `mtgca`*).

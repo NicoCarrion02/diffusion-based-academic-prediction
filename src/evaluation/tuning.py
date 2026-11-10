@@ -1,26 +1,24 @@
 """
-Leakage-free Nested Cross-Validation Hyperparameter Optimization and Model Selection.
+Nested Cross-Validation Hyperparameter Optimization and Model Selection.
 
-Methodological Guarantees:
-1. Strict Test-Set Isolation:
+Protocol Specification:
+1. Test-Set Isolation:
    All feature selection, imputation, TabRep generative balancing, target encoding,
-   hyperparameter optimization, and champion model selection operate strictly inside
-   `train.parquet`. The held-out `test.parquet` cohort is never accessed during tuning
-   or model selection.
+   hyperparameter optimization, and champion model selection operate within
+   `train.parquet`. The held-out `test.parquet` cohort is evaluated once after tuning.
 
 2. Intra-Split Feature Selection & Real-Cohort Target Encoding:
    Every outer and inner training split independently fits:
      FeatureSelector -> NativeImputer -> DatasetBalancer (TabRep-Flow) -> FeatureEncoderScaler(real).
-   Fitting `FeatureEncoderScaler` strictly on REAL split training rows prevents synthetic
-   `y=1` prior shift (`0.331 -> 0.500`) and rare-category synthetic label leakage.
+   Fitting `FeatureEncoderScaler` on observed training rows preserves empirical class priors
+   and prevents synthetic category-frequency distortion.
 
 3. Nested Cross-Validation Separation of Tuning and Model Selection:
    - Inner split(s) inside `D_outer_tr_k` optimize hyperparameters `theta_hat_k` via Optuna TPE
      (with baseline configuration enqueued as Trial 0).
-   - Outer split `k` refits `M(theta_hat_k)` on `D_outer_tr_k` and evaluates ONCE on untouched
-     `D_outer_val_k`.
+   - Outer split `k` refits `M(theta_hat_k)` on `D_outer_tr_k` and evaluates on `D_outer_val_k`.
    - Model/regime ranking (`auto` or `manual` mode) and Nadeau-Bengio variance-corrected
-     paired t-tests rely exclusively on these unbiased outer-fold validation scores.
+     paired t-tests are computed from outer-fold validation scores.
 """
 
 import hashlib
@@ -169,6 +167,8 @@ class NestedFoldCacheManager:
         categorical_strategy: str = "target_encoder",
         scaler_type: str = "robust",
         target_encoder_smoothing: float = 10.0,
+        numerical_imputer: str = "median",
+        nominal_missing_token: str = "MISSING",
         balancer_strategy: str = "tabrep",
         diffusion_config: Optional[Dict[str, Any]] = None,
         metadata_explorer: Optional[Any] = None,
@@ -184,6 +184,8 @@ class NestedFoldCacheManager:
         self.categorical_strategy = categorical_strategy
         self.scaler_type = scaler_type
         self.target_encoder_smoothing = target_encoder_smoothing
+        self.numerical_imputer = numerical_imputer
+        self.nominal_missing_token = nominal_missing_token
         self.balancer_strategy = balancer_strategy
         self.diffusion_config = diffusion_config or {}
         self.metadata_explorer = metadata_explorer
@@ -275,7 +277,11 @@ class NestedFoldCacheManager:
             except ValueError:
                 split_cat = None
 
-        imp = NativeImputer(categorization=split_cat)
+        imp = NativeImputer(
+            categorization=split_cat,
+            numerical_strategy=self.numerical_imputer,
+            nominal_missing_token=self.nominal_missing_token,
+        )
         X_tr_imp = imp.fit_transform(X_tr)
         X_val_imp = imp.transform(X_val)
 
@@ -291,7 +297,7 @@ class NestedFoldCacheManager:
         else:
             X_tr_bal_imp, y_tr_bal = None, None
 
-        # Fit FeatureEncoderScaler strictly on REAL split training rows (X_tr_imp, y_tr)
+        # Fit FeatureEncoderScaler on observed split training rows (X_tr_imp, y_tr)
         enc = FeatureEncoderScaler(
             categorical_strategy=self.categorical_strategy,
             scaler_type=self.scaler_type,
@@ -605,8 +611,8 @@ class NestedModelTunerSelector:
                         if cand not in candidates:
                             candidates.append(cand)
 
-            if self.n_trials_override is not None and self.n_trials_override < len(candidates):
-                candidates = candidates[: max(1, int(self.n_trials_override))]
+            if n_trials is not None and n_trials < len(candidates):
+                candidates = candidates[: max(1, int(n_trials))]
 
             best_cand = baseline_params
             best_score = -np.inf

@@ -326,60 +326,6 @@ class TabRepFlowMLP(nn.Module):
         return self.mlp(h)
 
 
-class FlowResidualBlock(nn.Module):
-    """Legacy residual dense block retained solely for optional ablation/backwards compatibility."""
-    def __init__(self, in_features: int, out_features: int, time_emb_dim: int, dropout: float = 0.1):
-        super().__init__()
-        self.fc1 = nn.Linear(in_features, out_features)
-        self.fc2 = nn.Linear(out_features, out_features)
-        self.time_proj = nn.Linear(time_emb_dim, out_features)
-        self.norm1 = nn.LayerNorm(out_features)
-        self.norm2 = nn.LayerNorm(out_features)
-        self.act = nn.SiLU()
-        self.dropout = nn.Dropout(dropout)
-        self.skip = nn.Linear(in_features, out_features) if in_features != out_features else nn.Identity()
-
-    def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
-        h = self.act(self.norm1(self.fc1(x)))
-        h = h + self.time_proj(self.act(t_emb))
-        h = self.dropout(self.act(self.norm2(self.fc2(h))))
-        return h + self.skip(x)
-
-
-class MLPFlowNet(nn.Module):
-    """Legacy residual velocity network retained solely for optional backwards compatibility."""
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dims: List[int] = [256, 512, 256],
-        time_emb_dim: int = 128,
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-        self.time_embed = nn.Sequential(
-            SinusoidalTimeEmbedding(time_emb_dim),
-            nn.Linear(time_emb_dim, time_emb_dim),
-            nn.SiLU(),
-            nn.Linear(time_emb_dim, time_emb_dim),
-        )
-        layers = []
-        prev_dim = input_dim
-        for h_dim in hidden_dims:
-            layers.append(FlowResidualBlock(prev_dim, h_dim, time_emb_dim, dropout=dropout))
-            prev_dim = h_dim
-        self.blocks = nn.ModuleList(layers)
-        self.out_proj = nn.Linear(prev_dim, input_dim)
-
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        if t.dim() == 0:
-            t = t.repeat(x.size(0))
-        t_emb = self.time_embed(t)
-        h = x
-        for block in self.blocks:
-            h = block(h, t_emb)
-        return self.out_proj(h)
-
-
 class TabRepDiffusionModel:
     """
     Official TabRep-Flow generative model combining:
@@ -402,10 +348,7 @@ class TabRepDiffusionModel:
     ):
         self.num_timesteps = num_timesteps
         self.architecture = architecture.lower()
-        if hidden_dims is None:
-            self.hidden_dims = [1024, 2048, 2048, 1024] if self.architecture == "tabrep_mlp" else [256, 512, 256]
-        else:
-            self.hidden_dims = list(hidden_dims)
+        self.hidden_dims = list(hidden_dims) if hidden_dims is not None else [1024, 2048, 2048, 1024]
         self.dim_t = dim_t
         self.dropout = dropout
         self.activation = activation
@@ -491,14 +434,8 @@ class TabRepDiffusionModel:
                 dropout=self.dropout,
                 activation=self.activation,
             ).to(self.device)
-        elif self.architecture == "residual_mlp":
-            self.network = MLPFlowNet(
-                input_dim=self.continuous_dim,
-                hidden_dims=self.hidden_dims,
-                dropout=self.dropout,
-            ).to(self.device)
         else:
-            raise ValueError(f"Unsupported TabRep architecture '{self.architecture}'. Expected 'tabrep_mlp' or 'residual_mlp'.")
+            raise ValueError(f"Unsupported TabRep architecture '{self.architecture}'. Expected 'tabrep_mlp'.")
 
         dataset = TensorDataset(continuous_data)
         gen = torch.Generator()

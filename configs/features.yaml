@@ -7,8 +7,8 @@ selection:
   method: "hybrid_importance"    # 'hybrid_importance' (MI + ExtraTrees + Domain Anchors) or 'domain_anchors'
 
 encoding:
-  # Downstream classifier encoding fitted strictly on REAL training rows (X_tr, y_tr):
-  # Options: 'target_encoder', 'frequency', 'one_hot', 'cat_converter'
+  # Downstream classifier encoding fitted on observed training rows (X_tr, y_tr):
+  # Options: 'target_encoder', 'catboost', 'frequency', 'one_hot', 'ordinal'
   categorical_strategy: "target_encoder"
   target_encoder_smoothing: 10.0
 
