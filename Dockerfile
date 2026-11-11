@@ -6,7 +6,8 @@ LABEL description="Diffusion-Based Academic Performance Prediction (PISA 2022)"
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    LD_PRELOAD=/opt/conda/lib/libiconv.so
 
 WORKDIR /workspace
 
