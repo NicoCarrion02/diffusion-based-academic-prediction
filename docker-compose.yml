@@ -9,9 +9,13 @@ services:
       - ./data:/workspace/data
       - ./outputs:/workspace/outputs
       - ./configs:/workspace/configs
+      - ./src:/workspace/src
+      - ./run.py:/workspace/run.py
+      - ./tests:/workspace/tests
     environment:
       - PYTHONUNBUFFERED=1
       - CUDA_VISIBLE_DEVICES=0
+      - LD_PRELOAD=/opt/conda/lib/libiconv.so
       - TABPFN_TOKEN=${TABPFN_TOKEN:-}
       - HF_TOKEN=${HF_TOKEN:-}
     deploy:
